@@ -99,6 +99,8 @@
     <Reference Include="System.Windows.Forms" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Handlers\Protocols\AsyncPatchProtocolHandler.cs" />
+    <Compile Include="Handlers\Protocols\Manifest\AsyncManifestBasedProtocolHandler.cs" />
     <Compile Include="Handlers\Protocols\Manifest\FTPProtocolHandler.cs" />
     <Compile Include="Handlers\Protocols\Manifest\HTTPProtocolHandler.cs" />
     <Compile Include="Handlers\Protocols\Manifest\ManifestBasedProtocolHandler.cs" />
