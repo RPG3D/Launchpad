@@ -22,6 +22,8 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Gtk;
 using Launchpad.Common.Enums;
 using Launchpad.Utilities.Handlers;
@@ -31,7 +33,6 @@ using SysPath = System.IO.Path;
 
 namespace Launchpad.Utilities.Interface
 {
-	[CLSCompliant(false)]
 	public partial class MainWindow : Window
 	{
 		/// <summary>
@@ -44,49 +45,61 @@ namespace Launchpad.Utilities.Interface
 		/// </summary>
 		private readonly ICatalog LocalizationCatalog = new Catalog("Launchpad", "./Content/locale");
 
-		public MainWindow()
-			: base(WindowType.Toplevel)
-		{
-			Build();
+		private readonly IProgress<ManifestGenerationProgressChangedEventArgs> ProgressReporter;
 
-			this.Manifest.ManifestGenerationProgressChanged += OnGenerateManifestProgressChanged;
-			this.Manifest.ManifestGenerationFinished += OnGenerateManifestFinished;
-
-			this.fileChooser.SetCurrentFolder(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
-			this.fileChooser.SelectMultiple = false;
-
-			this.progressLabel.Text = this.LocalizationCatalog.GetString("Idle");
-		}
+		private CancellationTokenSource TokenSource;
 
 		/// <summary>
-		/// Exits the application properly when the window is deleted.
+		/// Initializes a new instance of the <see cref="MainWindow"/> class.
 		/// </summary>
-		/// <param name="sender">Sender.</param>
-		/// <param name="a">The alpha component.</param>
-		private static void OnDeleteEvent(object sender, DeleteEventArgs a)
+		/// <param name="builder">The UI builder.</param>
+		/// <param name="handle">The native handle of the window.</param>
+		private MainWindow(Builder builder, IntPtr handle)
+			: base(handle)
 		{
-			Application.Quit();
-			a.RetVal = true;
+			builder.Autoconnect(this);
+
+			BindUIEvents();
+
+			this.ProgressReporter = new Progress<ManifestGenerationProgressChangedEventArgs>
+			(
+				e =>
+				{
+					var progressString = this.LocalizationCatalog.GetString("Hashing {0} : {1} out of {2}");
+					this.StatusLabel.Text = string.Format(progressString, e.Filepath, e.CompletedFiles, e.TotalFiles);
+
+					this.MainProgressBar.Fraction = e.CompletedFiles / (double)e.TotalFiles;
+				}
+			);
+
+			this.FolderChooser.SetCurrentFolder(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
+			this.FolderChooser.SelectMultiple = false;
+
+			this.StatusLabel.Text = this.LocalizationCatalog.GetString("Idle");
 		}
 
-		private void OnGenerateGameManifestButtonClicked(object sender, EventArgs e)
+		private async void OnGenerateGameManifestButtonClicked(object sender, EventArgs e)
 		{
-			this.generateGameManifestButton.Sensitive = false;
-			this.generateLaunchpadManifestButton.Sensitive = false;
-
-			string targetDirectory = this.fileChooser.Filename;
+			var targetDirectory = this.FolderChooser.Filename;
 
 			if (!Directory.GetFiles(targetDirectory).Any(s => s.Contains("GameVersion.txt")))
 			{
-				MessageDialog dialog = new MessageDialog(this,
+				var dialog = new MessageDialog
+				(
+					this,
 					DialogFlags.Modal,
 					MessageType.Question,
-					ButtonsType.YesNo, this.LocalizationCatalog.GetString("No GameVersion.txt file could be found in the target directory. This file is required.\n" +
-												  "Would you like to add one? The version will be \"1.0.0\"."));
+					ButtonsType.YesNo,
+					this.LocalizationCatalog.GetString
+					(
+						"No GameVersion.txt file could be found in the target directory. This file is required.\n" +
+						"Would you like to add one? The version will be \"1.0.0\"."
+					)
+				);
 
 				if (dialog.Run() == (int) ResponseType.Yes)
 				{
-					string gameVersionPath = $"{targetDirectory}{SysPath.DirectorySeparatorChar}GameVersion.txt";
+					var gameVersionPath = SysPath.Combine(targetDirectory, "GameVersion.txt");
 					File.WriteAllText(gameVersionPath, new Version("1.0.0").ToString());
 
 					dialog.Destroy();
@@ -98,50 +111,43 @@ namespace Launchpad.Utilities.Interface
 				}
 			}
 
-			this.Manifest.GenerateManifest(targetDirectory, EManifestType.Game);
+			await GenerateManifestAsync(EManifestType.Game);
 		}
 
-		private void OnGenerateLaunchpadManifestButtonClicked(object sender, EventArgs e)
+		private async void OnGenerateLaunchpadManifestButtonClicked(object sender, EventArgs e)
 		{
-			this.generateGameManifestButton.Sensitive = false;
-			this.generateLaunchpadManifestButton.Sensitive = false;
-
-			string targetDirectory = this.fileChooser.Filename;
-
-			this.Manifest.GenerateManifest(targetDirectory, EManifestType.Launchpad);
-
+			await GenerateManifestAsync(EManifestType.Launchpad);
 		}
 
-		/// <summary>
-		/// Updates the UI when a file is entered into the manifest.
-		/// </summary>
-		/// <param name="sender">Sender.</param>
-		/// <param name="e">Arguments containing information about the entered file.</param>
-		private void OnGenerateManifestProgressChanged(object sender, ManifestGenerationProgressChangedEventArgs e)
+		private async Task GenerateManifestAsync(EManifestType manifestType)
 		{
-			Application.Invoke(delegate
-				{
-					string progressString = this.LocalizationCatalog.GetString("{0} : {1} out of {2}");
-					this.progressLabel.Text = string.Format(progressString, e.Filepath, e.CompletedFiles, e.TotalFiles);
+			this.TokenSource = new CancellationTokenSource();
 
-					this.progressbar.Fraction = e.CompletedFiles / (double)e.TotalFiles;
-				});
-		}
+			this.GenerateGameManifestButton.Sensitive = false;
+			this.GenerateLaunchpadManifestButton.Sensitive = false;
 
-		/// <summary>
-		/// Updates the UI when the manifest is complete.
-		/// </summary>
-		/// <param name="sender">Sender.</param>
-		/// <param name="e">Empty arguments</param>
-		private void OnGenerateManifestFinished(object sender, EventArgs e)
-		{
-			Application.Invoke(delegate
-				{
-					this.progressLabel.Text = this.LocalizationCatalog.GetString("Finished");
-					this.generateGameManifestButton.Sensitive = true;
-					this.generateLaunchpadManifestButton.Sensitive = true;
-				});
+			var targetDirectory = this.FolderChooser.Filename;
+
+			try
+			{
+				await this.Manifest.GenerateManifestAsync
+				(
+					targetDirectory,
+					manifestType,
+					this.ProgressReporter,
+					this.TokenSource.Token
+				);
+
+				this.StatusLabel.Text = this.LocalizationCatalog.GetString("Finished");
+			}
+			catch (TaskCanceledException)
+			{
+				this.StatusLabel.Text = this.LocalizationCatalog.GetString("Cancelled");
+				this.MainProgressBar.Fraction = 0;
+			}
+
+			this.GenerateGameManifestButton.Sensitive = true;
+			this.GenerateLaunchpadManifestButton.Sensitive = true;
 		}
 	}
 }
-

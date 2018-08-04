@@ -4,7 +4,7 @@
 //  Author:
 //       Jarl Gullberg <jarl.gullberg@gmail.com>
 //
-//  Copyright (c) 2016 Jarl Gullberg
+//  Copyright (c) 2017 Jarl Gullberg
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -18,12 +18,16 @@
 //
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 using System;
-using System.Drawing;
 using System.IO;
-using log4net;
+
 using Launchpad.Common.Enums;
+using Launchpad.Launcher.Configuration;
+using Launchpad.Launcher.Services;
+using NLog;
+using SixLabors.ImageSharp;
 
 namespace Launchpad.Launcher.Handlers.Protocols
 {
@@ -42,54 +46,74 @@ namespace Launchpad.Launcher.Handlers.Protocols
 		/// <summary>
 		/// Logger instance for this class.
 		/// </summary>
-		private static readonly ILog Log = LogManager.GetLogger(typeof(PatchProtocolHandler));
+		private static readonly ILogger Log = LogManager.GetCurrentClassLogger();
 
 		/// <summary>
-		/// Creates a new instance of the <see cref="PatchProtocolHandler"/> class.
+		/// Gets the config handler reference.
 		/// </summary>
-		protected PatchProtocolHandler()
-		{
-			this.ModuleInstallFinishedArgs = new ModuleInstallationFinishedArgs();
-			this.ModuleInstallFailedArgs = new ModuleInstallationFailedArgs();
-		}
+		protected ConfigHandler Config { get; } = ConfigHandler.Instance;
 
 		/// <summary>
-		/// TODO: Move to constructor
-		/// The config handler reference.
+		/// Gets the configuration instance.
 		/// </summary>
-		protected readonly ConfigHandler Config = ConfigHandler.Instance;
+		protected ILaunchpadConfiguration Configuration { get; } = ConfigHandler.Instance.Configuration;
 
 		/// <summary>
 		/// Raised whenever the download progress of a module changes.
 		/// </summary>
-		public event ModuleDownloadProgressChangedEventHandler ModuleDownloadProgressChanged;
+		public event EventHandler<ModuleProgressChangedArgs> ModuleDownloadProgressChanged;
 
 		/// <summary>
 		/// Raised whenever the verification progress of a module changes.
 		/// </summary>
-		public event ModuleVerifyProgressChangedEventHandler ModuleVerifyProgressChanged;
+		public event EventHandler<ModuleProgressChangedArgs> ModuleVerifyProgressChanged;
 
 		/// <summary>
 		/// Raised whenever the update progress of a module changes.
 		/// </summary>
-		public event ModuleUpdateProgressChangedEventHandler ModuleUpdateProgressChanged;
+		public event EventHandler<ModuleProgressChangedArgs> ModuleUpdateProgressChanged;
 
 		/// <summary>
 		/// Raised whenever the installation of a module finishes.
 		/// </summary>
-		public event ModuleInstallationFinishedEventHandler ModuleInstallationFinished;
+		public event EventHandler<EModule> ModuleInstallationFinished;
 
 		/// <summary>
 		/// Raised whenver the installation of a module fails.
 		/// </summary>
-		public event ModuleInstallationFailedEventHandler ModuleInstallationFailed;
+		public event EventHandler<EModule> ModuleInstallationFailed;
 
-		protected readonly ModuleProgressChangedArgs ModuleDownloadProgressArgs = new ModuleProgressChangedArgs();
-		protected readonly ModuleProgressChangedArgs ModuleVerifyProgressArgs = new ModuleProgressChangedArgs();
-		protected readonly ModuleProgressChangedArgs ModuleUpdateProgressArgs = new ModuleProgressChangedArgs();
+		/// <summary>
+		/// Gets the download progress arguments.
+		/// </summary>
+		protected ModuleProgressChangedArgs ModuleDownloadProgressArgs { get; }
 
-		protected readonly ModuleInstallationFinishedArgs ModuleInstallFinishedArgs;
-		protected readonly ModuleInstallationFailedArgs ModuleInstallFailedArgs;
+		/// <summary>
+		/// Gets the verification progress arguments.
+		/// </summary>
+		protected ModuleProgressChangedArgs ModuleVerifyProgressArgs { get; }
+
+		/// <summary>
+		/// Gets the update progress arguments.
+		/// </summary>
+		protected ModuleProgressChangedArgs ModuleUpdateProgressArgs { get; }
+
+		/// <summary>
+		/// Gets the tagfile service.
+		/// </summary>
+		protected TagfileService TagfileService { get; }
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="PatchProtocolHandler"/> class.
+		/// </summary>
+		protected PatchProtocolHandler()
+		{
+			this.ModuleDownloadProgressArgs = new ModuleProgressChangedArgs();
+			this.ModuleVerifyProgressArgs = new ModuleProgressChangedArgs();
+			this.ModuleUpdateProgressArgs = new ModuleProgressChangedArgs();
+
+			this.TagfileService = new TagfileService();
+		}
 
 		/// <summary>
 		/// Determines whether this instance can provide patches. Checks for an active connection to the
@@ -101,14 +125,9 @@ namespace Launchpad.Launcher.Handlers.Protocols
 		/// <summary>
 		/// Determines whether the protocol can provide patches and updates for the provided platform.
 		/// </summary>
+		/// <param name="platform">The platform to check.</param>
 		/// <returns><c>true</c> if the platform is available; otherwise, <c>false</c>.</returns>
 		public abstract bool IsPlatformAvailable(ESystemTarget platform);
-
-		/// <summary>
-		/// Determines whether this protocol can provide access to a changelog.
-		/// </summary>
-		/// <returns><c>true</c> if this protocol can provide a changelog; otherwise, <c>false</c>.</returns>
-		public abstract bool CanProvideChangelog();
 
 		/// <summary>
 		/// Determines whether this protocol can provide access to a banner for the game.
@@ -120,17 +139,19 @@ namespace Launchpad.Launcher.Handlers.Protocols
 		/// Gets the changelog.
 		/// </summary>
 		/// <returns>The changelog.</returns>
-		public abstract string GetChangelogSource();
+		public abstract string GetChangelogMarkup();
 
 		/// <summary>
 		/// Gets the banner.
 		/// </summary>
 		/// <returns>The banner.</returns>
-		public abstract Bitmap GetBanner();
+		public abstract Image<Rgba32> GetBanner();
 
 		/// <summary>
 		/// Determines whether or not the specified module is outdated.
 		/// </summary>
+		/// <param name="module">The module.</param>
+		/// <returns>true if the module is outdated; otherwise, false.</returns>
 		public abstract bool IsModuleOutdated(EModule module);
 
 		/// <summary>
@@ -138,14 +159,11 @@ namespace Launchpad.Launcher.Handlers.Protocols
 		/// </summary>
 		public virtual void InstallGame()
 		{
-			this.ModuleInstallFinishedArgs.Module = EModule.Game;
-			this.ModuleInstallFailedArgs.Module = EModule.Game;
-
 			try
 			{
-				//create the .install file to mark that an installation has begun
-				//if it exists, do nothing.
-				ConfigHandler.CreateGameCookie();
+				// Create the .install file to mark that an installation has begun.
+				// If it exists, do nothing.
+				this.TagfileService.CreateGameTagfile();
 
 				// Download Game
 				DownloadModule(EModule.Game);
@@ -168,6 +186,7 @@ namespace Launchpad.Launcher.Handlers.Protocols
 		/// <summary>
 		/// Downloads the latest version of the specified module.
 		/// </summary>
+		/// <param name="module">The module.</param>
 		protected abstract void DownloadModule(EModule module);
 
 		/// <summary>
@@ -179,100 +198,49 @@ namespace Launchpad.Launcher.Handlers.Protocols
 		/// <summary>
 		/// Verifies and repairs the files of the specified module.
 		/// </summary>
+		/// <param name="module">The module.</param>
 		public abstract void VerifyModule(EModule module);
 
+		/// <summary>
+		/// Invoke the <see cref="ModuleDownloadProgressChanged"/> event.
+		/// </summary>
 		protected void OnModuleDownloadProgressChanged()
 		{
 			this.ModuleDownloadProgressChanged?.Invoke(this, this.ModuleDownloadProgressArgs);
 		}
 
+		/// <summary>
+		/// Invoke the <see cref="ModuleVerifyProgressChanged"/> event.
+		/// </summary>
 		protected void OnModuleVerifyProgressChanged()
 		{
 			this.ModuleVerifyProgressChanged?.Invoke(this, this.ModuleVerifyProgressArgs);
 		}
 
+		/// <summary>
+		/// Invoke the <see cref="ModuleUpdateProgressChanged"/> event.
+		/// </summary>
 		protected void OnModuleUpdateProgressChanged()
 		{
 			this.ModuleUpdateProgressChanged?.Invoke(this, this.ModuleUpdateProgressArgs);
 		}
 
-		protected void OnModuleInstallationFinished()
+		/// <summary>
+		/// Invoke the <see cref="ModuleInstallationFinished"/> event.
+		/// </summary>
+		/// <param name="module">The module that finished.</param>
+		protected void OnModuleInstallationFinished(EModule module)
 		{
-			this.ModuleInstallationFinished?.Invoke(this, this.ModuleInstallFinishedArgs);
+			this.ModuleInstallationFinished?.Invoke(this, module);
 		}
 
-		protected void OnModuleInstallationFailed()
+		/// <summary>
+		/// Invoke the <see cref="ModuleInstallationFailed"/> event.
+		/// </summary>
+		/// <param name="module">The module that failed.</param>
+		protected void OnModuleInstallationFailed(EModule module)
 		{
-			this.ModuleInstallationFailed?.Invoke(this, this.ModuleInstallFailedArgs);
-		}
-	}
-
-	/// <summary>
-	/// A list of modules that can be downloaded and reported on.
-	/// </summary>
-	public enum EModule : byte
-	{
-		Launcher 	= 1,
-		Game 		= 2
-	}
-
-	/*
-		Common events for all patching protocols
-	*/
-	public delegate void ModuleInstallationProgressChangedEventHandler(object sender,ModuleProgressChangedArgs e);
-	public delegate void ModuleDownloadProgressChangedEventHandler(object sender,ModuleProgressChangedArgs e);
-	public delegate void ModuleVerifyProgressChangedEventHandler(object sender,ModuleProgressChangedArgs e);
-	public delegate void ModuleUpdateProgressChangedEventHandler(object sender,ModuleProgressChangedArgs e);
-
-	public delegate void ModuleInstallationFinishedEventHandler(object sender,ModuleInstallationFinishedArgs e);
-	public delegate void ModuleInstallationFailedEventHandler(object sender,ModuleInstallationFailedArgs e);
-
-	/*
-		Common arguments for all patching protocols
-	*/
-	public sealed class ModuleProgressChangedArgs : EventArgs
-	{
-		public EModule Module
-		{
-			get;
-			set;
-		}
-
-		public string ProgressBarMessage
-		{
-			get;
-			set;
-		}
-
-		public string IndicatorLabelMessage
-		{
-			get;
-			set;
-		}
-
-		public double ProgressFraction
-		{
-			get;
-			set;
-		}
-	}
-
-	public sealed class ModuleInstallationFinishedArgs : EventArgs
-	{
-		public EModule Module
-		{
-			get;
-			set;
-		}
-	}
-
-	public sealed class ModuleInstallationFailedArgs : EventArgs
-	{
-		public EModule Module
-		{
-			get;
-			set;
+			this.ModuleInstallationFailed?.Invoke(this, module);
 		}
 	}
 }
-

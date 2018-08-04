@@ -21,13 +21,19 @@
 
 using System;
 using System.IO;
-using Gtk;
+using System.Runtime.InteropServices;
+using System.Threading;
+using CommandLine;
+using GLib;
 using Launchpad.Utilities.Handlers;
 using Launchpad.Utilities.Utility.Events;
 using Launchpad.Utilities.Interface;
 using Launchpad.Utilities.Options;
-using log4net;
 using Launchpad.Common.Enums;
+using Launchpad.Utilities.Utility;
+using NLog;
+using Application = Gtk.Application;
+using Task = System.Threading.Tasks.Task;
 
 namespace Launchpad.Utilities
 {
@@ -36,65 +42,77 @@ namespace Launchpad.Utilities
 		/// <summary>
 		/// Logger instance for this class.
 		/// </summary>
-		private static readonly ILog Log = LogManager.GetLogger(typeof(Program));
+		private static readonly ILogger Log = LogManager.GetCurrentClassLogger();
 
 		/// <summary>
 		/// The main entry point for the application.
 		/// </summary>
-		[STAThread]
-		private static void Main(string[] args)
+		private static async Task Main(string[] args)
 		{
-			CLIOptions options = new CLIOptions();
-			if (CommandLine.Parser.Default.ParseArguments(args, options))
+			// Set correct working directory for compatibility with double-clicking
+			Directory.SetCurrentDirectory(DirectoryHelpers.GetLocalDir());
+
+			if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 			{
-				if (options.RunBatchProcessing)
+				Environment.SetEnvironmentVariable("GSETTINGS_SCHEMA_DIR", "share\\glib-2.0\\schemas\\");
+			}
+
+			var options = new CLIOptions();
+			Parser.Default.ParseArguments<CLIOptions>(args)
+				.WithParsed(r => options = r)
+				.WithNotParsed(r => options = null);
+
+			if (options is null)
+			{
+				// Parsing probably failed, bail out
+				return;
+			}
+
+			if (options.RunBatchProcessing)
+			{
+				if (string.IsNullOrEmpty(options.TargetDirectory) || options.ManifestType == EManifestType.Unknown)
 				{
-					if (string.IsNullOrEmpty(options.TargetDirectory) || options.ManifestType == EManifestType.Unknown)
-					{
-						Console.Write(options.GetUsage());
-					}
-
-					// At this point, the options should be valid. Run batch processing.
-					if (Directory.Exists(options.TargetDirectory))
-					{
-						Log.Info("Generating manifest...");
-
-						ManifestGenerationHandler manifestGenerationHandler = new ManifestGenerationHandler();
-
-						manifestGenerationHandler.ManifestGenerationProgressChanged += OnProgressChanged;
-						manifestGenerationHandler.ManifestGenerationFinished += OnGenerationFinished;
-
-						manifestGenerationHandler.GenerateManifest(options.TargetDirectory, options.ManifestType);
-					}
-					else
-					{
-						Log.Error("The selected directory did not exist.");
-					}
+					Log.Error("Target directory not set, or manifest type not set.");
+					return;
 				}
-				else if (string.IsNullOrEmpty(options.TargetDirectory) && options.ManifestType == EManifestType.Unknown)
-				{
-					// Run a GTK UI instead of batch processing
-					Application.Init();
 
-					MainWindow win = new MainWindow();
-					win.Show();
-					Application.Run();
+				// At this point, the options should be valid. Run batch processing.
+				if (Directory.Exists(options.TargetDirectory))
+				{
+					Log.Info("Generating manifest...");
+
+					var manifestGenerationHandler = new ManifestGenerationHandler();
+
+					var progressReporter = new Progress<ManifestGenerationProgressChangedEventArgs>
+					(
+						e => Log.Info($"Processed file {e.Filepath} : {e.Hash} : {e.Filesize}")
+					);
+
+					await manifestGenerationHandler.GenerateManifestAsync
+					(
+						options.TargetDirectory,
+						options.ManifestType,
+						progressReporter,
+						CancellationToken.None
+					);
+
+					Log.Info("Generation finished.");
 				}
 				else
 				{
-					Console.Write(options.GetUsage());
+					Log.Error("The selected directory did not exist.");
 				}
 			}
-		}
+			else if (string.IsNullOrEmpty(options.TargetDirectory) && options.ManifestType == EManifestType.Unknown)
+			{
+				// Run a GTK UI instead of batch processing
+				Application.Init();
+				SynchronizationContext.SetSynchronizationContext(new GLibSynchronizationContext());
 
-		private static void OnProgressChanged(object sender, ManifestGenerationProgressChangedEventArgs e)
-		{
-			Log.Info($"Processed file {e.Filepath} : {e.Hash} : {e.Filesize}");
-		}
-
-		private static void OnGenerationFinished(object sender, EventArgs e)
-		{
-			Log.Info("Generation finished.");
+				var win = MainWindow.Create();
+				win.Show();
+				Application.Run();
+			}
 		}
 	}
 }

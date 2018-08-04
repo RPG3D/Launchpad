@@ -18,18 +18,23 @@
 //
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 using System;
 using System.Collections.Generic;
 
 namespace Launchpad.Common
 {
+	/// <summary>
+	/// Various extension methods.
+	/// </summary>
 	public static class ExtensionMethods
 	{
 		/// <summary>
 		/// Sanitizes the input string, removing any \n, \r, or \0 characters.
 		/// </summary>
 		/// <param name="input">Input string.</param>
+		/// <returns>The string, without the illegal characters.</returns>
 		public static string RemoveLineSeparatorsAndNulls(this string input)
 		{
 			return input?.Replace("\n", string.Empty).Replace("\0", string.Empty).Replace("\r", string.Empty);

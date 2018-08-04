@@ -1,144 +1,53 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">x86</Platform>
-    <ProjectGuid>{676312FB-AF67-4340-B86F-9CCEB22D802F}</ProjectGuid>
     <OutputType>WinExe</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>Launchpad.Launcher</RootNamespace>
-    <FileAlignment>512</FileAlignment>
-    <PublishUrl>publish\</PublishUrl>
-    <Install>true</Install>
-    <InstallFrom>Disk</InstallFrom>
-    <UpdateEnabled>false</UpdateEnabled>
-    <UpdateMode>Foreground</UpdateMode>
-    <UpdateInterval>7</UpdateInterval>
-    <UpdateIntervalUnits>Days</UpdateIntervalUnits>
-    <UpdatePeriodically>false</UpdatePeriodically>
-    <UpdateRequired>false</UpdateRequired>
-    <MapFileExtensions>true</MapFileExtensions>
-    <ApplicationRevision>0</ApplicationRevision>
-    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
-    <IsWebBootstrapper>false</IsWebBootstrapper>
-    <UseApplicationTrust>false</UseApplicationTrust>
-    <BootstrapperEnabled>true</BootstrapperEnabled>
-    <ReleaseVersion>0.3.0</ReleaseVersion>
-    <SynchReleaseVersion>false</SynchReleaseVersion>
-    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
-    <LangVersion>7</LangVersion>
-    <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
-    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x86' ">
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>full</DebugType>
-    <Optimize>false</Optimize>
-    <OutputPath>bin\Debug</OutputPath>
-    <DefineConstants>DEBUG;TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-    <RunCodeAnalysis>true</RunCodeAnalysis>
-    <SignAssembly>true</SignAssembly>
-    <AssemblyOriginatorKeyFile>..\launchpad.snk</AssemblyOriginatorKeyFile>
     <AssemblyName>Launchpad</AssemblyName>
+    <TargetFramework>net462</TargetFramework>
+    <Platform>x86</Platform>
     <PlatformTarget>x86</PlatformTarget>
+    <CodeAnalysisRuleSet>..\stylecop.ruleset</CodeAnalysisRuleSet>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <LangVersion>7.1</LangVersion>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x86' ">
-    <Optimize>true</Optimize>
-    <OutputPath>bin\Release</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-    <SignAssembly>true</SignAssembly>
-    <AssemblyOriginatorKeyFile>..\launchpad.snk</AssemblyOriginatorKeyFile>
-    <AssemblyName>Launchpad</AssemblyName>
-    <PlatformTarget>x86</PlatformTarget>
-    <DebugType>none</DebugType>
+  <!-- Workaround for https://github.com/dotnet/roslyn-project-system/issues/1739 -->
+  <PropertyGroup>
+    <AssemblySearchPaths>$(AssemblySearchPaths);{GAC}</AssemblySearchPaths>
   </PropertyGroup>
   <PropertyGroup>
-    <ApplicationIcon>Resources\RocketIcon.ico</ApplicationIcon>
-    <StartupObject>Launchpad.Launcher.Program</StartupObject>
+    <Version>2.0.0</Version>
+    <Description>An open-source launcher for your games.</Description>
+    <Authors>Jarl Gullberg;jax</Authors>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x86'">
+    <Prefer32bit>true</Prefer32bit>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x86'">
+    <Prefer32bit>true</Prefer32bit>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <Prefer32bit>true</Prefer32bit>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <Prefer32bit>true</Prefer32bit>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Launchpad.Common\Launchpad.Common.csproj">
-      <Project>{DDC53837-BA5A-41F3-8258-6224F3526A52}</Project>
-      <Name>Launchpad.Common</Name>
-    </ProjectReference>
-    <Reference Include="gtk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <Package>gtk-sharp-2.0</Package>
-      <SpecificVersion>True</SpecificVersion>
-    </Reference>
-    <Reference Include="gdk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <Package>gtk-sharp-2.0</Package>
-      <SpecificVersion>True</SpecificVersion>
-    </Reference>
-    <Reference Include="atk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <Package>gtk-sharp-2.0</Package>
-      <SpecificVersion>True</SpecificVersion>
-    </Reference>
-    <Reference Include="glib-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <Package>glib-sharp-2.0</Package>
-      <SpecificVersion>True</SpecificVersion>
-    </Reference>
-    <Reference Include="INIFileParser, Version=2.4.0.0, Culture=neutral, PublicKeyToken=79af7b307b65cf3c">
-      <HintPath>..\packages\ini-parser.2.4.0\lib\net20\INIFileParser.dll</HintPath>
-    </Reference>
-    <Reference Include="log4net, Version=2.0.8.0, Culture=neutral, PublicKeyToken=669e0ddf0bb1aa2a">
-      <HintPath>..\packages\log4net.2.0.8\lib\net45-full\log4net.dll</HintPath>
-    </Reference>
-    <Reference Include="NGettext, Version=0.6.1.0, Culture=neutral, PublicKeyToken=08d3d1c89dfd2985">
-      <HintPath>..\packages\NGettext.0.6.2\lib\net45\NGettext.dll</HintPath>
-    </Reference>
-    <Reference Include="webkit-sharp">
-      <HintPath>External Assemblies\webkit-sharp-1.1\webkit-sharp.dll</HintPath>
-    </Reference>
-    <Reference Include="System" />
-    <Reference Include="System.Drawing" />
-    <Reference Include="System.Windows.Forms" />
+    <PackageReference Include="Config.Net" Version="4.7.3" />
+    <PackageReference Include="GtkSharp" Version="3.22.24.36" />
+    <PackageReference Include="GtkSharp.Win32" Version="3.1.2" />
+    <PackageReference Include="NLog" Version="4.5.2" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="1.0.0-beta0002" />
+    <PackageReference Include="StyleCop.Analyzers" Version="1.1.0-beta004" PrivateAssets="all" />
+    <PackageReference Include="NGettext" Version="0.6.3" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Handlers\Protocols\Manifest\FTPProtocolHandler.cs" />
-    <Compile Include="Handlers\Protocols\Manifest\HTTPProtocolHandler.cs" />
-    <Compile Include="Handlers\Protocols\Manifest\ManifestBasedProtocolHandler.cs" />
-    <Compile Include="Program.cs" />
-    <Compile Include="Interface\MainWindow.cs" />
-    <Compile Include="Interface\ChangelogBrowser\Changelog.cs" />
-    <Compile Include="Interface\ChangelogBrowser\WindowsBrowser.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Handlers\ConfigHandler.cs" />
-    <Compile Include="Handlers\ChecksHandler.cs" />
-    <Compile Include="Handlers\StatsHandler.cs" />
-    <Compile Include="Handlers\GameHandler.cs" />
-    <Compile Include="Handlers\LauncherHandler.cs" />
-    <Compile Include="Handlers\Protocols\PatchProtocolHandler.cs" />
-    <Compile Include="Handlers\Protocols\BitTorrentProtocolHandler.cs" />
-    <Compile Include="Utility\Enums\ELauncherMode.cs" />
-    <Compile Include="gtk-gui\generated.cs" />
-    <Compile Include="gtk-gui\Launchpad.Launcher.Interface.MainWindow.cs" />
-    <Compile Include="Utility\ManifestEntryExtensions.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="gtk-gui\gui.stetic">
-      <LogicalName>gui.stetic</LogicalName>
-    </EmbeddedResource>
     <EmbeddedResource Include="app.manifest" />
-    <EmbeddedResource Include="Resources\RocketIcon.ico" />
-    <EmbeddedResource Include="Resources\RocketIcon_White.ico" />
-    <EmbeddedResource Include="Resources\RocketIcon_Grey.ico" />
-    <EmbeddedResource Include="Resources\launchpad_update.bat" />
-    <EmbeddedResource Include="Resources\launchpad_update.sh" />
+    <EmbeddedResource Include="Resources\**\*.*" />
+    <EmbeddedResource Include="Interface\Launchpad.glade" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="packages.config" />
-  </ItemGroup>
-  <ItemGroup>
-    <Folder Include="Handlers\Protocols\" />
-    <Folder Include="Interface\ChangelogBrowser" />
-    <Folder Include="Interface\gtk3" />
-  </ItemGroup>
-  <ItemGroup>
+    <Content Include="*.config">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="Content\locale\**\*.po">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <InProject>false</InProject>
@@ -147,26 +56,32 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <InProject>false</InProject>
     </Content>
-    <Content Include="App.config" />
-    <Content Include="External Assemblies\webkit-sharp-1.1\webkit-sharp.dll.config">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>webkit-sharp.dll.config</Link>
-      <InProject>false</InProject>
-    </Content>
   </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <!-- To modify your build process, add your task inside one of the targets below and uncomment it.
-       Other similar extension points exist, see Microsoft.Common.targets.
-  <Target Name="BeforeBuild">
+  <ItemGroup>
+    <AdditionalFiles Include="$(ProjectDir)\..\stylecop.json">
+      <Link>stylecop.json</Link>
+      <InProject>false</InProject>
+    </AdditionalFiles>
+    <AdditionalFiles Include="$(ProjectDir)\..\stylecop.ruleset">
+      <Link>stylecop.ruleset</Link>
+      <InProject>false</InProject>
+    </AdditionalFiles>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Launchpad.Common\Launchpad.Common.csproj" />
+  </ItemGroup>
+  <Target Name="CopyGTK" AfterTargets="Build">
+    <ItemGroup>
+      <GTKetc Include="$(SolutionDir)\lib\gtk+-3.16-bundle-win32\etc\**\*.*" />
+      <GTKlib Include="$(SolutionDir)\lib\gtk+-3.16-bundle-win32\lib\**\*.*" />
+      <GTKshare Include="$(SolutionDir)\lib\gtk+-3.16-bundle-win32\share\**\*.*" />
+    </ItemGroup>
+    <Message Text="Copying GTK+ libraries..." />
+    <Copy SourceFiles="@(GTKetc)" DestinationFolder="$(OutputPath)\etc\%(RecursiveDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(GTKlib)" DestinationFolder="$(OutputPath)\lib\%(RecursiveDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(GTKshare)" DestinationFolder="$(OutputPath)\share\%(RecursiveDir)" SkipUnchangedFiles="true" />
   </Target>
-  <Target Name="AfterBuild">
+  <Target Name="DeleteRuntimeInfoMono" AfterTargets="AfterBuild">
+    <Delete Files="$(OutputPath)\System.Runtime.InteropServices.RuntimeInformation.dll" Condition="'$(OS)' == 'Unix'" />
   </Target>
-  -->
-  <ProjectExtensions>
-    <MonoDevelop>
-      <Properties>
-        <GtkDesignInfo generateGettext="False" />
-      </Properties>
-    </MonoDevelop>
-  </ProjectExtensions>
 </Project>

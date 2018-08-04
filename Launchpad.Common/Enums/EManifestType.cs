@@ -18,6 +18,7 @@
 //
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 namespace Launchpad.Common.Enums
 {
@@ -29,16 +30,16 @@ namespace Launchpad.Common.Enums
 		/// <summary>
 		/// An unknown manifest.
 		/// </summary>
-		Unknown 			= 0,
+		Unknown = 0,
 
 		/// <summary>
 		/// A launcher manifest.
 		/// </summary>
-		Launchpad 			= 1,
+		Launchpad = 1,
 
 		/// <summary>
 		/// A game manifest.
 		/// </summary>
-		Game 				= 2
+		Game = 2
 	}
 }

@@ -4,7 +4,7 @@
 //  Author:
 //       Jarl Gullberg <jarl.gullberg@gmail.com>
 //
-//  Copyright (c) 2016 Jarl Gullberg
+//  Copyright (c) 2017 Jarl Gullberg
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 //
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 using System;
 using System.IO;
@@ -37,10 +38,10 @@ namespace Launchpad.Common.Handlers
 		/// <param name="dataStream">File stream.</param>
 		public static string GetStreamHash(Stream dataStream)
 		{
-			using (MD5 md5 = MD5.Create())
+			using (var md5 = MD5.Create())
 			{
-				//calculate the hash of the stream.
-				string resultString = BitConverter.ToString(md5.ComputeHash(dataStream)).Replace("-", string.Empty);
+				// Calculate the hash of the stream.
+				var resultString = BitConverter.ToString(md5.ComputeHash(dataStream)).Replace("-", string.Empty);
 
 				return resultString;
 			}

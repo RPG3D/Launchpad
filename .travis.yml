@@ -1,14 +1,8 @@
 language: csharp
 solution: Launchpad.sln
-dist: trusty
+mono: latest
+dotnet: 2.1.3
 install:
-  - sudo apt-get install -y gtk-sharp2 libwebkit-cil-dev libwebkit1.1-cil nuget libmono-cecil-cil-dev libglade2.0-cil-dev
-  - nuget restore Launchpad.sln -Verbosity detailed
+  - dotnet restore
 script:
-  - xbuild /p:Configuration=Release Launchpad.Launcher/Launchpad.Launcher.csproj
-  - xbuild /p:Configuration=Release Launchpad.Utilities/Launchpad.Utilities.csproj
-  - xbuild /p:Configuration=Debug Launchpad.Tests/Launchpad.Tests.csproj
-after_success:
-  - mono --debug --profile=log:coverage,covfilter=+Launchpad,covfilter=-Launchpad.Tests Launchpad.Tests/bin/Debug/Launchpad.Tests.exe --noresult
-  - mprof-report --reports=coverage --coverage-out=coverage.xml output.mlpd
-  - bash <(curl -s https://codecov.io/bash)
+  - msbuild /p:Configuration=Release Launchpad.sln

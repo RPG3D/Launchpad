@@ -20,7 +20,6 @@
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 using CommandLine;
-using CommandLine.Text;
 using Launchpad.Common.Enums;
 
 namespace Launchpad.Utilities.Options
@@ -51,23 +50,6 @@ namespace Launchpad.Utilities.Options
 		{
 			get;
 			set;
-		}
-
-		[ParserState]
-		public IParserState LastParserState
-		{
-			get;
-			set;
-		}
-
-		/// <summary>
-		/// Gets the generated help text.
-		/// </summary>
-		/// <returns>The usage.</returns>
-		[HelpOption]
-		public string GetUsage()
-		{
-			return HelpText.AutoBuild(this, current => HelpText.DefaultParsingErrorsHandler(this, current));
 		}
 	}
 }

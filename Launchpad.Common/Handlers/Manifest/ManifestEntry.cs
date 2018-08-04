@@ -4,7 +4,7 @@
 //  Author:
 //       Jarl Gullberg <jarl.gullberg@gmail.com>
 //
-//  Copyright (c) 2016 Jarl Gullberg
+//  Copyright (c) 2017 Jarl Gullberg
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 //
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 using System;
 
@@ -30,24 +31,36 @@ namespace Launchpad.Common.Handlers.Manifest
 	/// </summary>
 	public sealed class ManifestEntry : IEquatable<ManifestEntry>
 	{
+		/// <summary>
+		/// Gets or sets the path of the file, relative to the game directory.
+		/// </summary>
 		public string RelativePath
 		{
 			get;
 			set;
 		}
 
+		/// <summary>
+		/// Gets or sets the MD5 hash of the file.
+		/// </summary>
 		public string Hash
 		{
 			get;
 			set;
 		}
 
+		/// <summary>
+		/// Gets or sets the size in bytes of the file.
+		/// </summary>
 		public long Size
 		{
 			get;
 			set;
 		}
 
+		/// <summary>
+		/// Initializes a new instance of the <see cref="ManifestEntry"/> class.
+		/// </summary>
 		public ManifestEntry()
 		{
 			this.RelativePath = string.Empty;
@@ -73,10 +86,10 @@ namespace Launchpad.Common.Handlers.Manifest
 				return false;
 			}
 
-			string cleanInput = rawInput.RemoveLineSeparatorsAndNulls();
+			var cleanInput = rawInput.RemoveLineSeparatorsAndNulls();
 
 			// Split the string into its three components - file, hash and size
-			string[] entryElements = cleanInput.Split(':');
+			var entryElements = cleanInput.Split(':');
 
 			// If we have three elements (which we should always have), set them in the provided entry
 			if (entryElements.Length != 3)
@@ -85,7 +98,7 @@ namespace Launchpad.Common.Handlers.Manifest
 			}
 
 			// Sanitize the manifest path, converting \ to / on unix and / to \ on Windows.
-			if (SystemInformation.IsRunningOnUnix())
+			if (PlatformHelpers.IsRunningOnUnix())
 			{
 				inEntry.RelativePath = entryElements[0].Replace('\\', '/');
 			}
@@ -104,8 +117,7 @@ namespace Launchpad.Common.Handlers.Manifest
 			inEntry.Hash = entryElements[1];
 
 			// Attempt to parse the final element as a long-type byte count.
-			long parsedSize;
-			if (!long.TryParse(entryElements[2], out parsedSize))
+			if (!long.TryParse(entryElements[2], out var parsedSize))
 			{
 				// Oops. The parsing failed, so this entry is invalid.
 				return false;
@@ -122,11 +134,11 @@ namespace Launchpad.Common.Handlers.Manifest
 		}
 
 		/// <summary>
-		/// Returns a <see cref="System.String"/> that represents the current <see cref="ManifestEntry"/>.
+		/// Returns a <see cref="string"/> that represents the current <see cref="ManifestEntry"/>.
 		/// The returned value matches a raw in-manifest representation of the entry, in the form of
 		/// [path]:[hash]:[size]
 		/// </summary>
-		/// <returns>A <see cref="System.String"/> that represents the current <see cref="ManifestEntry"/>.</returns>
+		/// <returns>A <see cref="string"/> that represents the current <see cref="ManifestEntry"/>.</returns>
 		public override string ToString()
 		{
 			return $"{this.RelativePath}:{this.Hash}:{this.Size}";
@@ -143,12 +155,7 @@ namespace Launchpad.Common.Handlers.Manifest
 			return Equals(obj as ManifestEntry);
 		}
 
-		/// <summary>
-		/// Determines whether the specified <see cref="ManifestEntry"/> is equal to the current <see cref="ManifestEntry"/>.
-		/// </summary>
-		/// <param name="other">The <see cref="ManifestEntry"/> to compare with the current <see cref="ManifestEntry"/>.</param>
-		/// <returns><c>true</c> if the specified <see cref="ManifestEntry"/> is equal to the current
-		/// <see cref="ManifestEntry"/>; otherwise, <c>false</c>.</returns>
+		/// <inheritdoc />
 		public bool Equals(ManifestEntry other)
 		{
 			if (other == null)
@@ -157,8 +164,8 @@ namespace Launchpad.Common.Handlers.Manifest
 			}
 
 			return this.RelativePath == other.RelativePath &&
-			       string.Equals(this.Hash, other.Hash, StringComparison.InvariantCultureIgnoreCase) &&
-			       this.Size == other.Size;
+				string.Equals(this.Hash, other.Hash, StringComparison.InvariantCultureIgnoreCase) &&
+				this.Size == other.Size;
 		}
 
 		/// <summary>

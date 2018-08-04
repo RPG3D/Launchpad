@@ -4,7 +4,7 @@
 //  Author:
 //       Jarl Gullberg <jarl.gullberg@gmail.com>
 //
-//  Copyright (c) 2016 Jarl Gullberg
+//  Copyright (c) 2017 Jarl Gullberg
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -18,87 +18,91 @@
 //
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
-using log4net;
+
 using Launchpad.Common;
+using Launchpad.Launcher.Configuration;
 using Launchpad.Launcher.Handlers.Protocols;
+using Launchpad.Launcher.Services;
+using Launchpad.Launcher.Utility;
+using NLog;
 
 namespace Launchpad.Launcher.Handlers
 {
 	/// <summary>
-	///  This class has a lot of async stuff going on. It handles installing the game
-	///  and updating it when it needs to.
+	/// This class has a lot of async stuff going on. It handles installing the game
+	/// and updating it when it needs to.
 	///
-	///  The download protocol is selected based on the configuration each time this is
-	///  instantiated, and control is then handed over to whatever the protocol needs
-	///  to do.
+	/// The download protocol is selected based on the configuration each time this is
+	/// instantiated, and control is then handed over to whatever the protocol needs
+	/// to do.
 	///
-	///	 Since this class starts new threads in which it does the larger computations,
-	///	 there must be no useage of UI code in this class. Keep it clean!
+	/// Since this class starts new threads in which it does the larger computations,
+	/// there must be no useage of UI code in this class. Keep it clean!
 	/// </summary>
 	internal sealed class GameHandler
 	{
 		/// <summary>
 		/// Logger instance for this class.
 		/// </summary>
-		private static readonly ILog Log = LogManager.GetLogger(typeof(GameHandler));
+		private static readonly ILogger Log = LogManager.GetCurrentClassLogger();
 
 		/// <summary>
 		/// Event raised whenever the progress of installing or updating the game changes.
 		/// </summary>
-		public event ModuleInstallationProgressChangedEventHandler ProgressChanged;
+		public event EventHandler<ModuleProgressChangedArgs> ProgressChanged;
 
 		/// <summary>
 		/// Event raised whenever the game finishes downloading, regardless of whether or not it's updating
 		/// or installing.
 		/// </summary>
-		public event GameInstallationFinishedEventHandler DownloadFinished;
+		public event EventHandler DownloadFinished;
 
 		/// <summary>
 		/// Event raised whenever the game fails to download, regardless of whether or not it's updating
 		/// or installing.
 		/// </summary>
-		public event GameInstallationFailedEventHander DownloadFailed;
+		public event EventHandler DownloadFailed;
 
 		/// <summary>
 		/// Event raised whenever the game fails to launch.
 		/// </summary>
-		public event GameLaunchFailedEventHandler LaunchFailed;
+		public event EventHandler LaunchFailed;
 
 		/// <summary>
 		/// Event raised whenever the game exits.
 		/// </summary>
-		public event GameExitEventHandler GameExited;
+		public event EventHandler<int> GameExited;
 
 		// ...
-		private readonly GameExitEventArgs GameExitArgs = new GameExitEventArgs();
-
-		/// <summary>
-		/// The config handler reference.
-		/// </summary>
-		private static readonly ConfigHandler Config = ConfigHandler.Instance;
+		private static readonly ILaunchpadConfiguration Configuration = ConfigHandler.Instance.Configuration;
 
 		private readonly PatchProtocolHandler Patch;
 
+		private readonly GameArgumentService GameArgumentService = new GameArgumentService();
+
 		/// <summary>
-		/// Creates a new instance of the <see cref="GameHandler"/> class.
+		/// Initializes a new instance of the <see cref="GameHandler"/> class.
 		/// </summary>
 		public GameHandler()
 		{
-			this.Patch = Config.GetPatchProtocol();
-			if (this.Patch != null)
+			this.Patch = PatchProtocolProvider.GetHandler();
+			if (this.Patch == null)
 			{
-				this.Patch.ModuleDownloadProgressChanged += OnModuleInstallProgressChanged;
-				this.Patch.ModuleVerifyProgressChanged += OnModuleInstallProgressChanged;
-				this.Patch.ModuleUpdateProgressChanged += OnModuleInstallProgressChanged;
-
-				this.Patch.ModuleInstallationFinished += OnModuleInstallationFinished;
-				this.Patch.ModuleInstallationFailed += OnModuleInstallationFailed;
+				return;
 			}
+
+			this.Patch.ModuleDownloadProgressChanged += OnModuleInstallProgressChanged;
+			this.Patch.ModuleVerifyProgressChanged += OnModuleInstallProgressChanged;
+			this.Patch.ModuleUpdateProgressChanged += OnModuleInstallProgressChanged;
+
+			this.Patch.ModuleInstallationFinished += OnModuleInstallationFinished;
+			this.Patch.ModuleInstallationFailed += OnModuleInstallationFailed;
 		}
 
 		/// <summary>
@@ -107,7 +111,7 @@ namespace Launchpad.Launcher.Handlers
 		public void InstallGame()
 		{
 			Log.Info($"Starting installation of game files using protocol \"{this.Patch.GetType().Name}\"");
-			Thread t = new Thread(this.Patch.InstallGame)
+			var t = new Thread(this.Patch.InstallGame)
 			{
 				Name = "InstallGame",
 				IsBackground = true
@@ -122,7 +126,7 @@ namespace Launchpad.Launcher.Handlers
 		public void UpdateGame()
 		{
 			Log.Info($"Starting update of game files using protocol \"{this.Patch.GetType().Name}\"");
-			Thread t = new Thread(() => this.Patch.UpdateModule(EModule.Game))
+			var t = new Thread(() => this.Patch.UpdateModule(EModule.Game))
 			{
 				Name = "UpdateGame",
 				IsBackground = true
@@ -137,7 +141,7 @@ namespace Launchpad.Launcher.Handlers
 		public void VerifyGame()
 		{
 			Log.Info("Beginning verification of game files.");
-			Thread t = new Thread(() => this.Patch.VerifyModule(EModule.Game))
+			var t = new Thread(() => this.Patch.VerifyModule(EModule.Game))
 			{
 				Name = "VerifyGame",
 				IsBackground = true
@@ -152,19 +156,19 @@ namespace Launchpad.Launcher.Handlers
 		public void ReinstallGame()
 		{
 			Log.Info("Beginning full reinstall of game files.");
-			if (Directory.Exists(Config.GetGamePath()))
+			if (Directory.Exists(DirectoryHelpers.GetLocalGameDirectory()))
 			{
 				Log.Info("Deleting existing game files.");
-				Directory.Delete(Config.GetGamePath(), true);
+				Directory.Delete(DirectoryHelpers.GetLocalGameDirectory(), true);
 			}
 
-			if (File.Exists(ConfigHandler.GetGameCookiePath()))
+			if (File.Exists(DirectoryHelpers.GetGameTagfilePath()))
 			{
 				Log.Info("Deleting install progress cookie.");
-				File.Delete(ConfigHandler.GetGameCookiePath());
+				File.Delete(DirectoryHelpers.GetGameTagfilePath());
 			}
 
-			Thread t = new Thread(() => this.Patch.InstallGame())
+			var t = new Thread(() => this.Patch.InstallGame())
 			{
 				Name = "ReinstallGame",
 				IsBackground = true
@@ -178,47 +182,55 @@ namespace Launchpad.Launcher.Handlers
 		/// </summary>
 		public void LaunchGame()
 		{
-			//start new process of the game executable
 			try
 			{
+				var executable = Path.Combine(DirectoryHelpers.GetLocalGameDirectory(), Configuration.ExecutablePath);
+				if (!File.Exists(executable))
+				{
+					throw new FileNotFoundException($"Game executable at path (\"{executable}\") not found.");
+				}
+
+				var executableDir = Path.GetDirectoryName(executable) ?? DirectoryHelpers.GetLocalLauncherDirectory();
+
 				// Do not move the argument assignment inside the gameStartInfo initializer.
 				// It causes a TargetInvocationException crash through black magic.
-				string gameArguments = string.Join(" ", ConfigHandler.GetGameArguments());
-				ProcessStartInfo gameStartInfo = new ProcessStartInfo
+				var gameArguments = string.Join(" ", this.GameArgumentService.GetGameArguments());
+				var gameStartInfo = new ProcessStartInfo
 				{
-					UseShellExecute = false,
-					FileName = Config.GetGameExecutable(),
-					Arguments = gameArguments
+					FileName = executable,
+					Arguments = gameArguments,
+					WorkingDirectory = executableDir
 				};
-
-				this.GameExitArgs.GameName = Config.GetGameName();
 
 				Log.Info($"Launching game. \n\tExecutable path: {gameStartInfo.FileName}");
 
-				Process gameProcess = new Process
+				var gameProcess = new Process
 				{
 					StartInfo = gameStartInfo,
 					EnableRaisingEvents = true
 				};
 
-				gameProcess.Exited += delegate
+				gameProcess.Exited += (sender, args) =>
 				{
 					if (gameProcess.ExitCode != 0)
 					{
-						Log.Info($"The game exited with an exit code of {gameProcess.ExitCode}. " +
-						         "There may have been issues during runtime, or the game may not have started at all.");
+						Log.Info
+						(
+							$"The game exited with an exit code of {gameProcess.ExitCode}. " +
+							"There may have been issues during runtime, or the game may not have started at all."
+						);
 					}
-					this.GameExitArgs.ExitCode = gameProcess.ExitCode;
-					OnGameExited();
+
+					OnGameExited(gameProcess.ExitCode);
 
 					// Manual disposing
 					gameProcess.Dispose();
 				};
 
 				// Make sure the game executable is flagged as such on Unix
-				if (SystemInformation.IsRunningOnUnix())
+				if (PlatformHelpers.IsRunningOnUnix())
 				{
-					Process.Start("chmod", $"+x {Config.GetGameExecutable()}");
+					Process.Start("chmod", $"+x {gameStartInfo.FileName}");
 				}
 
 				gameProcess.Start();
@@ -228,13 +240,11 @@ namespace Launchpad.Launcher.Handlers
 				Log.Warn($"Game launch failed (FileNotFoundException): {fex.Message}");
 				Log.Warn("If the game executable is there, try overriding the executable name in the configuration file.");
 
-				this.GameExitArgs.ExitCode = 2;
 				OnGameLaunchFailed();
 			}
 			catch (IOException ioex)
 			{
 				Log.Warn($"Game launch failed (IOException): {ioex.Message}");
-				this.GameExitArgs.ExitCode = 1;
 
 				OnGameLaunchFailed();
 			}
@@ -257,9 +267,9 @@ namespace Launchpad.Launcher.Handlers
 		/// </summary>
 		/// <param name="sender">Sender.</param>
 		/// <param name="e">E.</param>
-		private void OnModuleInstallationFinished(object sender, ModuleInstallationFinishedArgs e)
+		private void OnModuleInstallationFinished(object sender, EModule e)
 		{
-			this.DownloadFinished?.Invoke(sender, e);
+			this.DownloadFinished?.Invoke(sender, EventArgs.Empty);
 		}
 
 		/// <summary>
@@ -268,9 +278,9 @@ namespace Launchpad.Launcher.Handlers
 		/// </summary>
 		/// <param name="sender">Sender.</param>
 		/// <param name="e">E.</param>
-		private void OnModuleInstallationFailed(object sender, ModuleInstallationFailedArgs e)
+		private void OnModuleInstallationFailed(object sender, EModule e)
 		{
-			this.DownloadFailed?.Invoke(sender, e);
+			this.DownloadFailed?.Invoke(sender, EventArgs.Empty);
 		}
 
 		/// <summary>
@@ -284,36 +294,9 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// Raises the Game Exited event.
 		/// </summary>
-		private void OnGameExited()
+		private void OnGameExited(int exitCode)
 		{
-			this.GameExited?.Invoke(this, this.GameExitArgs);
-		}
-	}
-
-	/*
-		Game-specific delegates
-	*/
-	public delegate void GameInstallationFinishedEventHandler(object sender,EventArgs e);
-	public delegate void GameInstallationFailedEventHander(object sender,EventArgs e);
-	public delegate void GameLaunchFailedEventHandler(object sender,EventArgs e);
-	public delegate void GameExitEventHandler(object sender,GameExitEventArgs e);
-
-	/*
-		Game-specific event arguments
-	*/
-	public class GameExitEventArgs : EventArgs
-	{
-		public string GameName
-		{
-			get;
-			set;
-		}
-
-		public int ExitCode
-		{
-			get;
-			set;
+			this.GameExited?.Invoke(this, exitCode);
 		}
 	}
 }
-

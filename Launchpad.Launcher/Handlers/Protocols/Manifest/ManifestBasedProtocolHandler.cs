@@ -4,7 +4,7 @@
 //  Author:
 //       Jarl Gullberg <jarl.gullberg@gmail.com>
 //
-//  Copyright (c) 2016 Jarl Gullberg
+//  Copyright (c) 2017 Jarl Gullberg
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -18,20 +18,21 @@
 //
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Security.Policy;
-using log4net;
 using Launchpad.Common;
 using Launchpad.Common.Enums;
 using Launchpad.Common.Handlers;
 using Launchpad.Common.Handlers.Manifest;
+using Launchpad.Launcher.Services;
 using Launchpad.Launcher.Utility;
 using NGettext;
+using NLog;
 
 namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 {
@@ -41,14 +42,16 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 	public abstract class ManifestBasedProtocolHandler : PatchProtocolHandler
 	{
 		/// <summary>
+		/// Logger instance for this class.
+		/// </summary>
+		private static readonly ILogger Log = LogManager.GetCurrentClassLogger();
+
+		/// <summary>
 		/// The localization catalog.
 		/// </summary>
 		private static readonly ICatalog LocalizationCatalog = new Catalog("Launchpad", "./Content/locale");
 
-		/// <summary>
-		/// Logger instance for this class.
-		/// </summary>
-		private static readonly ILog Log = LogManager.GetLogger(typeof(ManifestBasedProtocolHandler));
+		private readonly LocalVersionService LocalVersionService = new LocalVersionService();
 
 		/// <summary>
 		/// The file manifest handler. This allows access to the launcher and game file lists.
@@ -56,31 +59,26 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		private readonly ManifestHandler FileManifestHandler;
 
 		/// <summary>
-		/// Creates a new instance of the <see cref="ManifestBasedProtocolHandler"/> class.
+		/// Initializes a new instance of the <see cref="ManifestBasedProtocolHandler"/> class.
 		/// </summary>
 		protected ManifestBasedProtocolHandler()
 		{
 			this.FileManifestHandler = new ManifestHandler
 			(
-				ConfigHandler.GetLocalDir(),
-				new Url(this.Config.GetBaseProtocolURL()),
-				this.Config.GetSystemTarget()
+				DirectoryHelpers.GetLocalLauncherDirectory(),
+				this.Configuration.RemoteAddress,
+				this.Configuration.SystemTarget
 			);
 		}
 
-		/// <summary>
-		/// Installs the game.
-		/// </summary>
+		/// <inheritdoc />
 		public override void InstallGame()
 		{
-			this.ModuleInstallFinishedArgs.Module = EModule.Game;
-			this.ModuleInstallFailedArgs.Module = EModule.Game;
-
 			try
 			{
 				// Create the .install file to mark that an installation has begun.
 				// If it exists, do nothing.
-				ConfigHandler.CreateGameCookie();
+				this.TagfileService.CreateGameTagfile();
 
 				// Make sure the manifest is up to date
 				RefreshModuleManifest(EModule.Game);
@@ -103,13 +101,7 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			// which happens to coincide with the general design.
 		}
 
-		/// <summary>
-		/// Updates the specified module to the latest version.
-		/// </summary>
-		/// <param name="module">The module to update.</param>
-		/// <exception cref="ArgumentOutOfRangeException">
-		/// Will be thrown if the <see cref="EModule"/> passed to the function is not a valid value.
-		/// </exception>
+		/// <inheritdoc />
 		public override void UpdateModule(EModule module)
 		{
 			IReadOnlyList<ManifestEntry> manifest;
@@ -120,8 +112,6 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				{
 					RefreshModuleManifest(EModule.Launcher);
 
-					this.ModuleInstallFinishedArgs.Module = EModule.Launcher;
-					this.ModuleInstallFailedArgs.Module = EModule.Launcher;
 					manifest = this.FileManifestHandler.GetManifest(EManifestType.Launchpad, false);
 					oldManifest = this.FileManifestHandler.GetManifest(EManifestType.Launchpad, true);
 					break;
@@ -130,8 +120,6 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				{
 					RefreshModuleManifest(EModule.Game);
 
-					this.ModuleInstallFinishedArgs.Module = EModule.Game;
-					this.ModuleInstallFailedArgs.Module = EModule.Game;
 					manifest = this.FileManifestHandler.GetManifest(EManifestType.Game, false);
 					oldManifest = this.FileManifestHandler.GetManifest(EManifestType.Game, true);
 					break;
@@ -146,43 +134,50 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			if (manifest == null)
 			{
 				Log.Error($"No manifest was found when updating the module \"{module}\". The server files may be inaccessible or missing.");
-				OnModuleInstallationFailed();
+				OnModuleInstallationFailed(module);
 				return;
 			}
 
 			// This dictionary holds a list of new entries and their equivalents from the old manifest. It is used
 			// to determine whether or not a file is partial, or merely old yet smaller.
-			Dictionary<ManifestEntry, ManifestEntry> oldEntriesBeingReplaced = new Dictionary<ManifestEntry, ManifestEntry>();
-			List<ManifestEntry> filesRequiringUpdate = new List<ManifestEntry>();
-			foreach (ManifestEntry fileEntry in manifest)
+			var oldEntriesBeingReplaced = new Dictionary<ManifestEntry, ManifestEntry>();
+			var filesRequiringUpdate = new List<ManifestEntry>();
+			foreach (var fileEntry in manifest)
 			{
 				filesRequiringUpdate.Add(fileEntry);
-				if (oldManifest != null)
+				if (oldManifest == null)
 				{
-					if (!oldManifest.Contains(fileEntry))
-					{
-						// See if there is an old entry which matches the new one.
-						ManifestEntry matchingOldEntry =
-							oldManifest.FirstOrDefault(oldEntry => oldEntry.RelativePath == fileEntry.RelativePath);
+					continue;
+				}
 
-						if (matchingOldEntry != null)
-						{
-							oldEntriesBeingReplaced.Add(fileEntry, matchingOldEntry);
-						}
-					}
+				if (oldManifest.Contains(fileEntry))
+				{
+					continue;
+				}
+
+				// See if there is an old entry which matches the new one.
+				var matchingOldEntry =
+					oldManifest.FirstOrDefault(oldEntry => oldEntry.RelativePath == fileEntry.RelativePath);
+
+				if (matchingOldEntry != null)
+				{
+					oldEntriesBeingReplaced.Add(fileEntry, matchingOldEntry);
 				}
 			}
 
 			try
 			{
-				int updatedFiles = 0;
-				foreach (ManifestEntry fileEntry in filesRequiringUpdate)
+				var updatedFiles = 0;
+				foreach (var fileEntry in filesRequiringUpdate)
 				{
 					++updatedFiles;
 
-					this.ModuleUpdateProgressArgs.IndicatorLabelMessage = GetUpdateIndicatorLabelMessage(Path.GetFileName(fileEntry.RelativePath),
+					this.ModuleUpdateProgressArgs.IndicatorLabelMessage = GetUpdateIndicatorLabelMessage
+					(
+						Path.GetFileName(fileEntry.RelativePath),
 						updatedFiles,
-						filesRequiringUpdate.Count);
+						filesRequiringUpdate.Count
+					);
 					OnModuleUpdateProgressChanged();
 
 					// If we're updating an existing file, make sure to let the downloader know
@@ -199,58 +194,66 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			catch (IOException ioex)
 			{
 				Log.Warn($"Updating of {module} files failed (IOException): " + ioex.Message);
-				OnModuleInstallationFailed();
+				OnModuleInstallationFailed(module);
 				return;
 			}
 
-			OnModuleInstallationFinished();
+			OnModuleInstallationFinished(module);
 		}
 
-		/// <summary>
-		/// Verifies and repairs the files of the specified module.
-		/// </summary>
+		/// <inheritdoc />
 		public override void VerifyModule(EModule module)
 		{
-			IReadOnlyList<ManifestEntry> manifest = this.FileManifestHandler.GetManifest((EManifestType) module, false);
-			List<ManifestEntry> brokenFiles = new List<ManifestEntry>();
+			var manifest = this.FileManifestHandler.GetManifest((EManifestType)module, false);
+			var brokenFiles = new List<ManifestEntry>();
 
 			if (manifest == null)
 			{
 				Log.Error($"No manifest was found when verifying the module \"{module}\". The server files may be inaccessible or missing.");
-				OnModuleInstallationFailed();
+				OnModuleInstallationFailed(module);
 				return;
 			}
 
 			try
 			{
-				int verifiedFiles = 0;
-				foreach (ManifestEntry fileEntry in manifest)
+				var verifiedFiles = 0;
+				foreach (var fileEntry in manifest)
 				{
 					++verifiedFiles;
 
 					// Prepare the progress event contents
-					this.ModuleVerifyProgressArgs.IndicatorLabelMessage = GetVerifyIndicatorLabelMessage(Path.GetFileName(fileEntry.RelativePath),
-						verifiedFiles, manifest.Count);
+					this.ModuleVerifyProgressArgs.IndicatorLabelMessage = GetVerifyIndicatorLabelMessage
+					(
+						Path.GetFileName(fileEntry.RelativePath),
+						verifiedFiles,
+						manifest.Count
+					);
 					OnModuleVerifyProgressChanged();
 
-					if (!fileEntry.IsFileIntegrityIntact())
+					if (fileEntry.IsFileIntegrityIntact())
 					{
-						brokenFiles.Add(fileEntry);
-						Log.Info($"File \"{Path.GetFileName(fileEntry.RelativePath)}\" failed its integrity check and was queued for redownload.");
+						continue;
 					}
+
+					brokenFiles.Add(fileEntry);
+					Log.Info($"File \"{Path.GetFileName(fileEntry.RelativePath)}\" failed its integrity check and was queued for redownload.");
 				}
 
-				int downloadedFiles = 0;
-				foreach (ManifestEntry fileEntry in brokenFiles)
+				var downloadedFiles = 0;
+				foreach (var fileEntry in brokenFiles)
 				{
 					++downloadedFiles;
 
 					// Prepare the progress event contents
-					this.ModuleDownloadProgressArgs.IndicatorLabelMessage = GetDownloadIndicatorLabelMessage(Path.GetFileName(fileEntry.RelativePath),
-						downloadedFiles, brokenFiles.Count);
+					this.ModuleDownloadProgressArgs.IndicatorLabelMessage = GetDownloadIndicatorLabelMessage
+					(
+						Path.GetFileName(fileEntry.RelativePath),
+						downloadedFiles,
+						brokenFiles.Count
+					);
 					OnModuleDownloadProgressChanged();
 
-					for (int i = 0; i < this.Config.GetFileRetries(); ++i)
+					for (int i = 0; i < this.Configuration.RemoteFileDownloadRetries; ++i)
 					{
 						if (!fileEntry.IsFileIntegrityIntact())
 						{
@@ -267,18 +270,13 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			catch (IOException ioex)
 			{
 				Log.Warn($"Verification of {module} files failed (IOException): " + ioex.Message);
-				OnModuleInstallationFailed();
+				OnModuleInstallationFailed(module);
 			}
 
-			OnModuleInstallationFinished();
+			OnModuleInstallationFinished(module);
 		}
 
-		/// <summary>
-		/// Downloads the latest version of the specified module.
-		/// </summary>
-		/// <exception cref="ArgumentOutOfRangeException">
-		/// Will be thrown if the <see cref="EModule"/> passed to the function is not a valid value.
-		/// </exception>
+		/// <inheritdoc />
 		protected override void DownloadModule(EModule module)
 		{
 			IReadOnlyList<ManifestEntry> moduleManifest;
@@ -288,8 +286,6 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				{
 					RefreshModuleManifest(EModule.Launcher);
 
-					this.ModuleInstallFinishedArgs.Module = EModule.Launcher;
-					this.ModuleInstallFailedArgs.Module = EModule.Launcher;
 					moduleManifest = this.FileManifestHandler.GetManifest(EManifestType.Launchpad, false);
 					break;
 				}
@@ -297,22 +293,24 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				{
 					RefreshModuleManifest(EModule.Game);
 
-					this.ModuleInstallFinishedArgs.Module = EModule.Game;
-					this.ModuleInstallFailedArgs.Module = EModule.Game;
 					moduleManifest = this.FileManifestHandler.GetManifest(EManifestType.Game, false);
 					break;
 				}
 				default:
 				{
-					throw new ArgumentOutOfRangeException(nameof(module), module,
-						"An invalid module value was passed to DownloadModule.");
+					throw new ArgumentOutOfRangeException
+					(
+						nameof(module),
+						module,
+						"An invalid module value was passed to DownloadModule."
+					);
 				}
 			}
 
 			if (moduleManifest == null)
 			{
 				Log.Error($"No manifest was found when installing the module \"{module}\". The server files may be inaccessible or missing.");
-				OnModuleInstallationFailed();
+				OnModuleInstallationFailed(module);
 				return;
 			}
 
@@ -320,13 +318,11 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			// stored in the install cookie.
 
 			// Attempt to parse whatever is inside the install cookie
-			ManifestEntry lastDownloadedFile;
-			if (ManifestEntry.TryParse(File.ReadAllText(ConfigHandler.GetGameCookiePath()), out lastDownloadedFile))
+			if (ManifestEntry.TryParse(File.ReadAllText(DirectoryHelpers.GetGameTagfilePath()), out var lastDownloadedFile))
 			{
 				// Loop through all the entries in the manifest until we encounter
 				// an entry which matches the one in the install cookie
-
-				foreach (ManifestEntry fileEntry in moduleManifest)
+				foreach (var fileEntry in moduleManifest)
 				{
 					if (lastDownloadedFile.Equals(fileEntry))
 					{
@@ -336,14 +332,18 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				}
 			}
 
-			int downloadedFiles = 0;
-			foreach (ManifestEntry fileEntry in moduleManifest)
+			var downloadedFiles = 0;
+			foreach (var fileEntry in moduleManifest)
 			{
 				++downloadedFiles;
 
 				// Prepare the progress event contents
-				this.ModuleDownloadProgressArgs.IndicatorLabelMessage = GetDownloadIndicatorLabelMessage(Path.GetFileName(fileEntry.RelativePath),
-					downloadedFiles, moduleManifest.Count);
+				this.ModuleDownloadProgressArgs.IndicatorLabelMessage = GetDownloadIndicatorLabelMessage
+				(
+					Path.GetFileName(fileEntry.RelativePath),
+					downloadedFiles,
+					moduleManifest.Count
+				);
 				OnModuleDownloadProgressChanged();
 
 				DownloadManifestEntry(fileEntry, module);
@@ -353,21 +353,30 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		/// <summary>
 		/// Reads the contents of a remote file as a string.
 		/// </summary>
-		protected abstract string ReadRemoteFile(string url, bool useAnonymousLong = false);
+		/// <param name="url">The URL to read.</param>
+		/// <param name="useAnonymousLogin">Whether or not to use anonymous credentials.</param>
+		/// <returns>The contents of the file.</returns>
+		protected abstract string ReadRemoteFile(string url, bool useAnonymousLogin = false);
 
 		/// <summary>
 		/// Downloads the contents of the file at the specified url to the specified local path.
 		/// This method supported resuming a partial file.
 		/// </summary>
-		protected abstract void DownloadRemoteFile(string url, string localPath, long totalSize = 0, long contentOffset = 0,
-			bool useAnonymousLogin = false);
+		/// <param name="url">The URL to download.</param>
+		/// <param name="localPath">The local path where the file should be saved.</param>
+		/// <param name="totalSize">The expected total size of the file.</param>
+		/// <param name="contentOffset">The offset into the file where reading and writing should start.</param>
+		/// <param name="useAnonymousLogin">Whether or not to use anonymous credentials.</param>
+		protected abstract void DownloadRemoteFile
+		(
+			string url,
+			string localPath,
+			long totalSize = 0,
+			long contentOffset = 0,
+			bool useAnonymousLogin = false
+		);
 
-		/// <summary>
-		/// Determines whether or not the specified module is outdated.
-		/// </summary>
-		/// <exception cref="ArgumentOutOfRangeException">
-		/// Will be thrown if the <see cref="EModule"/> passed to the function is not a valid value.
-		/// </exception>
+		/// <inheritdoc />
 		public override bool IsModuleOutdated(EModule module)
 		{
 			try
@@ -379,20 +388,24 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				{
 					case EModule.Launcher:
 					{
-						local = this.Config.GetLocalLauncherVersion();
+						local = this.LocalVersionService.GetLocalLauncherVersion();
 						remote = GetRemoteLauncherVersion();
 						break;
 					}
 					case EModule.Game:
 					{
-						local = this.Config.GetLocalGameVersion();
+						local = this.LocalVersionService.GetLocalGameVersion();
 						remote = GetRemoteGameVersion();
 						break;
 					}
 					default:
 					{
-						throw new ArgumentOutOfRangeException(nameof(module), module,
-							"An invalid module value was passed to IsModuleOutdated.");
+						throw new ArgumentOutOfRangeException
+						(
+							nameof(module),
+							module,
+							"An invalid module value was passed to IsModuleOutdated."
+						);
 					}
 				}
 
@@ -427,34 +440,42 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			{
 				case EModule.Launcher:
 				{
-					baseRemoteURL = this.Config.GetLauncherBinariesURL();
-					baseLocalPath = ConfigHandler.GetTempLauncherDownloadPath();
+					baseRemoteURL = DirectoryHelpers.GetRemoteLauncherBinariesPath();
+					baseLocalPath = DirectoryHelpers.GetTempLauncherDownloadPath();
 					break;
 				}
 				case EModule.Game:
 				{
-					baseRemoteURL = this.Config.GetGameURL();
-					baseLocalPath = this.Config.GetGamePath();
+					baseRemoteURL = DirectoryHelpers.GetRemoteGamePath();
+					baseLocalPath = DirectoryHelpers.GetLocalGameDirectory();
 					break;
 				}
 				default:
 				{
-					throw new ArgumentOutOfRangeException(nameof(module), module,
-						"An invalid module value was passed to DownloadManifestEntry.");
+					throw new ArgumentOutOfRangeException
+					(
+						nameof(module),
+						module,
+						"An invalid module value was passed to DownloadManifestEntry."
+					);
 				}
 			}
 
 			// Build the access strings
-			string remoteURL = $"{baseRemoteURL}{fileEntry.RelativePath}";
-			string localPath = $"{baseLocalPath}{fileEntry.RelativePath}";
+			var remoteURL = $"{baseRemoteURL}{fileEntry.RelativePath}";
+			var localPath = $"{baseLocalPath}{fileEntry.RelativePath}";
 
 			// Make sure we have a directory to put the file in
 			if (!string.IsNullOrEmpty(localPath))
 			{
-				string localPathParentDir = Path.GetDirectoryName(localPath);
+				var localPathParentDir = Path.GetDirectoryName(localPath);
 				if (!Directory.Exists(localPathParentDir))
 				{
-					Directory.CreateDirectory(Path.GetDirectoryName(localPath));
+					var parentDir = Path.GetDirectoryName(localPath);
+					if (!(parentDir is null))
+					{
+						Directory.CreateDirectory(parentDir);
+					}
 				}
 			}
 			else
@@ -463,10 +484,10 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			}
 
 			// Reset the cookie
-			File.WriteAllText(ConfigHandler.GetGameCookiePath(), string.Empty);
+			File.WriteAllText(DirectoryHelpers.GetGameTagfilePath(), string.Empty);
 
 			// Write the current file progress to the install cookie
-			using (TextWriter textWriterProgress = new StreamWriter(ConfigHandler.GetGameCookiePath()))
+			using (TextWriter textWriterProgress = new StreamWriter(DirectoryHelpers.GetGameTagfilePath()))
 			{
 				textWriterProgress.WriteLine(fileEntry);
 				textWriterProgress.Flush();
@@ -485,7 +506,7 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 
 			if (File.Exists(localPath))
 			{
-				FileInfo fileInfo = new FileInfo(localPath);
+				var fileInfo = new FileInfo(localPath);
 				if (fileInfo.Length != fileEntry.Size)
 				{
 					// If the file is partial, resume the download.
@@ -506,7 +527,7 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				else
 				{
 					string localHash;
-					using (FileStream fs = File.OpenRead(localPath))
+					using (var fs = File.OpenRead(localPath))
 					{
 						localHash = MD5Handler.GetStreamHash(fs);
 					}
@@ -514,8 +535,11 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 					if (localHash != fileEntry.Hash)
 					{
 						// If the hash doesn't match, toss it in the bin and try again.
-						Log.Info($"Redownloading file \"{Path.GetFileNameWithoutExtension(fileEntry.RelativePath)}\": " +
-						         $"Hash sum mismatch. Local: {localHash}, Expected: {fileEntry.Hash}");
+						Log.Info
+						(
+							$"Redownloading file \"{Path.GetFileNameWithoutExtension(fileEntry.RelativePath)}\": " +
+							$"Hash sum mismatch. Local: {localHash}, Expected: {fileEntry.Hash}"
+						);
 
 						File.Delete(localPath);
 						DownloadRemoteFile(remoteURL, localPath, fileEntry.Size);
@@ -525,16 +549,18 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			else
 			{
 				// No file, download it
-				DownloadRemoteFile(remoteURL, localPath,fileEntry.Size);
+				DownloadRemoteFile(remoteURL, localPath, fileEntry.Size);
 			}
 
 			// We've finished the download, so empty the cookie
-			File.WriteAllText(ConfigHandler.GetGameCookiePath(), string.Empty);
+			File.WriteAllText(DirectoryHelpers.GetGameTagfilePath(), string.Empty);
 		}
 
 		/// <summary>
 		/// Determines whether or not the local copy of the manifest for the specifed module is outdated.
 		/// </summary>
+		/// <param name="module">The module.</param>
+		/// <returns>true if the manifest is outdated; otherwise, false.</returns>
 		/// <exception cref="ArgumentOutOfRangeException">
 		/// Will be thrown if the <see cref="EModule"/> passed to the function is not a valid value.
 		/// </exception>
@@ -546,33 +572,39 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				case EModule.Launcher:
 				case EModule.Game:
 				{
-					manifestPath = this.FileManifestHandler.GetManifestPath((EManifestType) module, false);
+					manifestPath = this.FileManifestHandler.GetManifestPath((EManifestType)module, false);
 					break;
 				}
 				default:
 				{
-					throw new ArgumentOutOfRangeException(nameof(module), module,
-						"An invalid module value was passed to RefreshModuleManifest.");
+					throw new ArgumentOutOfRangeException
+					(
+						nameof(module),
+						module,
+						"An invalid module value was passed to RefreshModuleManifest."
+					);
 				}
 			}
 
-			if (File.Exists(manifestPath))
+			if (!File.Exists(manifestPath))
 			{
-				string remoteHash = GetRemoteModuleManifestChecksum(module);
-				using (Stream file = File.OpenRead(manifestPath))
-				{
-					string localHash = MD5Handler.GetStreamHash(file);
-
-					return remoteHash != localHash;
-				}
+				return true;
 			}
 
-			return true;
+			var remoteHash = GetRemoteModuleManifestChecksum(module);
+			using (var file = File.OpenRead(manifestPath))
+			{
+				var localHash = MD5Handler.GetStreamHash(file);
+
+				return remoteHash != localHash;
+			}
 		}
 
 		/// <summary>
 		/// Gets the checksum of the manifest for the specified module.
 		/// </summary>
+		/// <param name="module">The module.</param>
+		/// <returns>The checksum.</returns>
 		/// <exception cref="ArgumentOutOfRangeException">
 		/// Will be thrown if the <see cref="EModule"/> passed to the function is not a valid value.
 		/// </exception>
@@ -584,13 +616,17 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				case EModule.Launcher:
 				case EModule.Game:
 				{
-					checksum = ReadRemoteFile(this.FileManifestHandler.GetManifestChecksumURL((EManifestType)module));
+					checksum = ReadRemoteFile(this.FileManifestHandler.GetManifestChecksumURL((EManifestType)module)).RemoveLineSeparatorsAndNulls();
 					break;
 				}
 				default:
 				{
-					throw new ArgumentOutOfRangeException(nameof(module), module,
-						"An invalid module value was passed to GetRemoteModuleManifestChecksum.");
+					throw new ArgumentOutOfRangeException
+					(
+						nameof(module),
+						module,
+						"An invalid module value was passed to GetRemoteModuleManifestChecksum."
+					);
 				}
 			}
 
@@ -600,6 +636,7 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		/// <summary>
 		/// Refreshes the current manifest by redownloading it, if required;
 		/// </summary>
+		/// <param name="module">The module.</param>
 		/// <exception cref="ArgumentOutOfRangeException">
 		/// Will be thrown if the <see cref="EModule"/> passed to the function is not a valid value.
 		/// </exception>
@@ -616,8 +653,12 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				}
 				default:
 				{
-					throw new ArgumentOutOfRangeException(nameof(module), module,
-						"An invalid module value was passed to RefreshModuleManifest");
+					throw new ArgumentOutOfRangeException
+					(
+						nameof(module),
+						module,
+						"An invalid module value was passed to RefreshModuleManifest"
+					);
 				}
 			}
 
@@ -640,6 +681,7 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		/// <summary>
 		/// Downloads the manifest for the specified module, and backs up the old copy of the manifest.
 		/// </summary>
+		/// <param name="module">The module.</param>
 		/// <exception cref="ArgumentOutOfRangeException">
 		/// Will be thrown if the <see cref="EModule"/> passed to the function is not a valid value.
 		/// </exception>
@@ -654,15 +696,19 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 				case EModule.Game:
 				{
 					remoteURL = this.FileManifestHandler.GetManifestURL((EManifestType)module);
-					localPath = this.FileManifestHandler.GetManifestPath((EManifestType) module, false);
-					oldLocalPath = this.FileManifestHandler.GetManifestPath((EManifestType) module, true);
+					localPath = this.FileManifestHandler.GetManifestPath((EManifestType)module, false);
+					oldLocalPath = this.FileManifestHandler.GetManifestPath((EManifestType)module, true);
 
 					break;
 				}
 				default:
 				{
-					throw new ArgumentOutOfRangeException(nameof(module), module,
-						"An invalid module value was passed to DownloadModuleManifest");
+					throw new ArgumentOutOfRangeException
+					(
+						nameof(module),
+						module,
+						"An invalid module value was passed to DownloadModuleManifest"
+					);
 				}
 			}
 
@@ -692,21 +738,18 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		/// If the version could not be retrieved from the server, a version of 0.0.0 is returned.</returns>
 		protected virtual Version GetRemoteLauncherVersion()
 		{
-			string remoteVersionPath = this.Config.GetLauncherVersionURL();
+			var remoteVersionPath = DirectoryHelpers.GetRemoteLauncherVersionPath();
 
 			// Config.GetDoOfficialUpdates is used here since the official update server always allows anonymous logins.
-			string remoteVersion = ReadRemoteFile(remoteVersionPath, this.Config.GetDoOfficialUpdates());
+			var remoteVersion = ReadRemoteFile(remoteVersionPath, this.Configuration.UseOfficialUpdates).RemoveLineSeparatorsAndNulls();
 
-			Version version;
-			if (Version.TryParse(remoteVersion, out version))
+			if (Version.TryParse(remoteVersion, out var version))
 			{
 				return version;
 			}
-			else
-			{
-				Log.Warn("Failed to parse the remote launcher version. Using the default of 0.0.0 instead.");
-				return new Version("0.0.0");
-			}
+
+			Log.Warn("Failed to parse the remote launcher version. Using the default of 0.0.0 instead.");
+			return new Version("0.0.0");
 		}
 
 		/// <summary>
@@ -715,27 +758,24 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		/// <returns>The remote game version.</returns>
 		protected virtual Version GetRemoteGameVersion()
 		{
-			string remoteVersionPath = $"{this.Config.GetBaseProtocolURL()}/game/{this.Config.GetSystemTarget()}/bin/GameVersion.txt";
-			string remoteVersion = ReadRemoteFile(remoteVersionPath);
+			var remoteVersionPath = $"{this.Configuration.RemoteAddress}/game/{this.Configuration.SystemTarget}/bin/GameVersion.txt";
+			var remoteVersion = ReadRemoteFile(remoteVersionPath).RemoveLineSeparatorsAndNulls();
 
-			Version version;
-			if (Version.TryParse(remoteVersion, out version))
+			if (Version.TryParse(remoteVersion, out var version))
 			{
 				return version;
 			}
-			else
-			{
-				Log.Warn("Failed to parse the remote game version. Using the default of 0.0.0 instead.");
-				return new Version("0.0.0");
-			}
+
+			Log.Warn("Failed to parse the remote game version. Using the default of 0.0.0 instead.");
+			return new Version("0.0.0");
 		}
 
 		/// <summary>
 		/// Gets the indicator label message to display to the user while repairing.
 		/// </summary>
 		/// <returns>The indicator label message.</returns>
-		/// <param name="verifiedFiles">N files downloaded.</param>
 		/// <param name="currentFilename">Current filename.</param>
+		/// <param name="verifiedFiles">N files downloaded.</param>
 		/// <param name="totalFiles">Total files to download.</param>
 		protected virtual string GetVerifyIndicatorLabelMessage(string currentFilename, int verifiedFiles, int totalFiles)
 		{
@@ -758,8 +798,8 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		/// Gets the indicator label message to display to the user while installing.
 		/// </summary>
 		/// <returns>The indicator label message.</returns>
-		/// <param name="downloadedFiles">N files downloaded.</param>
 		/// <param name="currentFilename">Current filename.</param>
+		/// <param name="downloadedFiles">N files downloaded.</param>
 		/// <param name="totalFiles">Total files to download.</param>
 		protected virtual string GetDownloadIndicatorLabelMessage(string currentFilename, int downloadedFiles, int totalFiles)
 		{

@@ -4,7 +4,7 @@
 //  Author:
 //       Jarl Gullberg <jarl.gullberg@gmail.com>
 //
-//  Copyright (c) 2016 Jarl Gullberg
+//  Copyright (c) 2017 Jarl Gullberg
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -13,20 +13,23 @@
 //
 //  This program is distributed in the hope that it will be useful,
 //  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See themanifest
+//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 //  GNU General Public License for more details.
 //
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 using System;
-using System.Drawing;
 using System.IO;
 using System.Net;
 using System.Text;
-using log4net;
+
 using Launchpad.Common;
 using Launchpad.Common.Enums;
+using NLog;
+using SixLabors.ImageSharp;
+using Image = SixLabors.ImageSharp.Image;
 
 namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 {
@@ -39,22 +42,23 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		/// <summary>
 		/// Logger instance for this class.
 		/// </summary>
-		private static readonly ILog Log = LogManager.GetLogger(typeof(HTTPProtocolHandler));
+		private static readonly ILogger Log = LogManager.GetCurrentClassLogger();
 
-		/// <summary>
-		/// Determines whether this instance can provide patches. Checks for an active connection to the
-		/// patch provider (file server, distributed hash tables, hyperspace compression waves etc.)
-		/// </summary>
-		/// <returns><c>true</c> if this instance can provide patches; otherwise, <c>false</c>.</returns>
+		/// <inheritdoc />
 		public override bool CanPatch()
 		{
 			Log.Info("Pinging remote patching server to determine if we can connect to it.");
 
-			bool bCanConnectToServer = false;
+			var canConnect = false;
 
 			try
 			{
-				HttpWebRequest plainRequest = CreateHttpWebRequest(this.Config.GetBaseHTTPUrl(), this.Config.GetRemoteUsername(), this.Config.GetRemotePassword());
+				var plainRequest = CreateHttpWebRequest
+				(
+					this.Configuration.RemoteAddress.AbsoluteUri,
+					this.Configuration.RemoteUsername,
+					this.Configuration.RemotePassword
+				);
 
 				if (plainRequest == null)
 				{
@@ -66,94 +70,67 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 
 				try
 				{
-					using (HttpWebResponse response = (HttpWebResponse) plainRequest.GetResponse())
+					using (var response = (HttpWebResponse)plainRequest.GetResponse())
 					{
 						if (response.StatusCode == HttpStatusCode.OK)
 						{
-							bCanConnectToServer = true;
+							canConnect = true;
 						}
 					}
 				}
 				catch (WebException wex)
 				{
 					Log.Warn("Unable to connect to remote patch server (WebException): " + wex.Message);
-					bCanConnectToServer = false;
+					canConnect = false;
 				}
 			}
 			catch (WebException wex)
 			{
 				Log.Warn("Unable to connect due a malformed url in the configuration (WebException): " + wex.Message);
-				bCanConnectToServer = false;
+				canConnect = false;
 			}
 
-			return bCanConnectToServer;
+			return canConnect;
 		}
 
-		/// <summary>
-		/// Determines whether the protocol can provide patches and updates for the provided platform.
-		/// </summary>
-		/// <returns><c>true</c> if the platform is available; otherwise, <c>false</c>.</returns>
+		/// <inheritdoc />
 		public override bool IsPlatformAvailable(ESystemTarget platform)
 		{
-			string remote = $"{this.Config.GetBaseHTTPUrl()}/game/{platform}/.provides";
+			var remote = $"{this.Configuration.RemoteAddress}/game/{platform}/.provides";
 
 			return DoesRemoteDirectoryOrFileExist(remote);
 		}
 
-		/// <summary>
-		/// Determines whether this protocol can provide access to a changelog.
-		/// </summary>
-		/// <returns><c>true</c> if this protocol can provide a changelog; otherwise, <c>false</c>.</returns>
-		public override bool CanProvideChangelog()
+		/// <inheritdoc />
+		public override string GetChangelogMarkup()
 		{
-			return false;
+			var changelogURL = $"{this.Configuration.RemoteAddress}/launcher/changelog.pango";
+			return ReadRemoteFile(changelogURL);
 		}
 
-		/// <summary>
-		/// Gets the changelog.
-		/// </summary>
-		/// <returns>The changelog.</returns>
-		public override string GetChangelogSource()
-		{
-			return string.Empty;
-		}
-
-		/// <summary>
-		/// Determines whether this protocol can provide access to a banner for the game.
-		/// </summary>
-		/// <returns><c>true</c> if this instance can provide banner; otherwise, <c>false</c>.</returns>
+		/// <inheritdoc />
 		public override bool CanProvideBanner()
 		{
-			string bannerURL = $"{this.Config.GetBaseHTTPUrl()}/launcher/banner.png";
+			var bannerURL = $"{this.Configuration.RemoteAddress}/launcher/banner.png";
 
 			return DoesRemoteDirectoryOrFileExist(bannerURL);
 		}
 
-		/// <summary>
-		/// Gets the banner.
-		/// </summary>
-		/// <returns>The banner.</returns>
-		public override Bitmap GetBanner()
+		/// <inheritdoc />
+		public override Image<Rgba32> GetBanner()
 		{
-			string bannerURL = $"{this.Config.GetBaseHTTPUrl()}/launcher/banner.png";
-			string localBannerPath = $"{Path.GetTempPath()}/banner.png";
+			var bannerURL = $"{this.Configuration.RemoteAddress}/launcher/banner.png";
+			var localBannerPath = $"{Path.GetTempPath()}/banner.png";
 
 			DownloadRemoteFile(bannerURL, localBannerPath);
-			return new Bitmap(localBannerPath);
+			return Image.Load(localBannerPath);
 		}
 
-		/// <summary>
-		/// Downloads a remote file to a local file path.
-		/// </summary>
-		/// <param name="url">The remote url of the file..</param>
-		/// <param name="localPath">Local path where the file is to be stored.</param>
-		/// <param name="totalSize">Total size of the file as stated in the manifest.</param>
-		/// <param name="contentOffset">Content offset. If nonzero, appends data to an existing file.</param>
-		/// <param name="useAnonymousLogin">If set to <c>true</c> use anonymous login.</param>
+		/// <inheritdoc />
 		protected override void DownloadRemoteFile(string url, string localPath, long totalSize = 0, long contentOffset = 0, bool useAnonymousLogin = false)
 		{
-			//clean the url string
-			string remoteURL = url.Replace(Path.DirectorySeparatorChar, '/');
+			// Clean the url string
+			var remoteURL = url.Replace(Path.DirectorySeparatorChar, '/');
 
 			string username;
 			string password;
@@ -164,18 +141,18 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			}
 			else
 			{
-				username = this.Config.GetRemoteUsername();
-				password = this.Config.GetRemotePassword();
+				username = this.Configuration.RemoteUsername;
+				password = this.Configuration.RemotePassword;
 			}
 
 			try
 			{
-				HttpWebRequest request = CreateHttpWebRequest(remoteURL, username, password);
+				var request = CreateHttpWebRequest(remoteURL, username, password);
 
 				request.Method = WebRequestMethods.Http.Get;
 				request.AddRange(contentOffset);
 
-				using (Stream contentStream = request.GetResponse().GetResponseStream())
+				using (var contentStream = request.GetResponse().GetResponseStream())
 				{
 					if (contentStream == null)
 					{
@@ -185,11 +162,11 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 						return;
 					}
 
-					using (FileStream fileStream = contentOffset > 0 ? new FileStream(localPath, FileMode.Append) :
+					using (var fileStream = contentOffset > 0 ? new FileStream(localPath, FileMode.Append) :
 																		new FileStream(localPath, FileMode.Create))
 					{
 						fileStream.Position = contentOffset;
-						long totalBytesDownloaded = contentOffset;
+						var totalBytesDownloaded = contentOffset;
 
 						long totalFileSize;
 						if (contentStream.CanSeek)
@@ -201,12 +178,12 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 							totalFileSize = totalSize;
 						}
 
-						int bufferSize = this.Config.GetDownloadBufferSize();
-						byte[] buffer = new byte[bufferSize];
+						var bufferSize = this.Configuration.RemoteFileDownloadBufferSize;
+						var buffer = new byte[bufferSize];
 
 						while (true)
 						{
-							int bytesRead = contentStream.Read(buffer, 0, buffer.Length);
+							var bytesRead = contentStream.Read(buffer, 0, buffer.Length);
 
 							if (bytesRead == 0)
 							{
@@ -218,8 +195,12 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 							totalBytesDownloaded += bytesRead;
 
 							// Report download progress
-							this.ModuleDownloadProgressArgs.ProgressBarMessage = GetDownloadProgressBarMessage(Path.GetFileName(remoteURL),
-								totalBytesDownloaded, totalFileSize);
+							this.ModuleDownloadProgressArgs.ProgressBarMessage = GetDownloadProgressBarMessage
+							(
+								Path.GetFileName(remoteURL),
+								totalBytesDownloaded,
+								totalFileSize
+							);
 							this.ModuleDownloadProgressArgs.ProgressFraction = totalBytesDownloaded / (double)totalFileSize;
 							OnModuleDownloadProgressChanged();
 						}
@@ -238,16 +219,10 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			}
 		}
 
-		/// <summary>
-		/// Reads the string content of a remote file. The output is scrubbed
-		/// of all \r, \n and \0 characters before it is returned.
-		/// </summary>
-		/// <returns>The contents of the remote file.</returns>
-		/// <param name="url">The remote url of the file.</param>
-		/// <param name="useAnonymousLogin">If set to <c>true</c> use anonymous login.</param>
+		/// <inheritdoc />
 		protected override string ReadRemoteFile(string url, bool useAnonymousLogin = false)
 		{
-			string remoteURL = url.Replace(Path.DirectorySeparatorChar, '/');
+			var remoteURL = url.Replace(Path.DirectorySeparatorChar, '/');
 
 			string username;
 			string password;
@@ -255,39 +230,41 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 			{
 				username = "anonymous";
 				password = "anonymous";
-
 			}
 			else
 			{
-				username = this.Config.GetRemoteUsername();
-				password = this.Config.GetRemotePassword();
+				username = this.Configuration.RemoteUsername;
+				password = this.Configuration.RemotePassword;
 			}
 
 			try
 			{
-				HttpWebRequest request = CreateHttpWebRequest(remoteURL, username, password);
+				var request = CreateHttpWebRequest(remoteURL, username, password);
 
 				request.Method = WebRequestMethods.Http.Get;
 
-				string data = "";
-				using (Stream remoteStream = request.GetResponse().GetResponseStream())
+				var data = string.Empty;
+				using (var remoteStream = request.GetResponse().GetResponseStream())
 				{
 					// Drop out early if the stream wasn't present
 					if (remoteStream == null)
 					{
-						Log.Error($"Failed to read the contents of remote file \"{remoteURL}\": " +
-						          "Remote stream was null. This could be due to a network interruption " +
-						          "or issues with the remote file.");
+						Log.Error
+						(
+							$"Failed to read the contents of remote file \"{remoteURL}\": " +
+							"Remote stream was null. This could be due to a network interruption " +
+							"or issues with the remote file."
+						);
 
 						return string.Empty;
 					}
 
-					int bufferSize = this.Config.GetDownloadBufferSize();
-					byte[] buffer = new byte[bufferSize];
+					var bufferSize = this.Configuration.RemoteFileDownloadBufferSize;
+					var buffer = new byte[bufferSize];
 
 					while (true)
 					{
-						int bytesRead = remoteStream.Read(buffer, 0, buffer.Length);
+						var bytesRead = remoteStream.Read(buffer, 0, buffer.Length);
 
 						if (bytesRead == 0)
 						{
@@ -298,7 +275,7 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 					}
 				}
 
-				return data.RemoveLineSeparatorsAndNulls();
+				return data;
 			}
 			catch (WebException wex)
 			{
@@ -316,15 +293,19 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		/// Creates a HTTP web request.
 		/// </summary>
 		/// <returns>The HTTP web request.</returns>
-		/// <param name="url">url of the desired remote object.</param>
+		/// <param name="remotePath">url of the desired remote object.</param>
 		/// <param name="username">The username used for authentication.</param>
 		/// <param name="password">The password used for authentication.</param>
-		private static HttpWebRequest CreateHttpWebRequest(string url, string username, string password)
+		private HttpWebRequest CreateHttpWebRequest(string remotePath, string username, string password)
 		{
+			if (!remotePath.StartsWith(this.Configuration.RemoteAddress.AbsoluteUri))
+			{
+				remotePath = $"{this.Configuration.RemoteAddress}/{remotePath}";
+			}
+
 			try
 			{
-				HttpWebRequest request = (HttpWebRequest)WebRequest.Create(new Uri(url));
-				request.Proxy = null;
+				var request = (HttpWebRequest)WebRequest.Create(new Uri(remotePath));
 				request.Credentials = new NetworkCredential(username, password);
 
 				return request;
@@ -354,8 +335,8 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		/// <param name="url">The remote url of the directory or file.</param>
 		private bool DoesRemoteDirectoryOrFileExist(string url)
 		{
-			string cleanURL = url.Replace(Path.DirectorySeparatorChar, '/');
-			HttpWebRequest request = CreateHttpWebRequest(cleanURL, this.Config.GetRemoteUsername(), this.Config.GetRemotePassword());
+			var cleanURL = url.Replace(Path.DirectorySeparatorChar, '/');
+			var request = CreateHttpWebRequest(cleanURL, this.Configuration.RemoteUsername, this.Configuration.RemotePassword);
 
 			request.Method = WebRequestMethods.Http.Head;
 			HttpWebResponse response = null;
@@ -384,4 +365,3 @@ namespace Launchpad.Launcher.Handlers.Protocols.Manifest
 		}
 	}
 }
-

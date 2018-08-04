@@ -4,7 +4,7 @@
 //  Author:
 //       Jarl Gullberg <jarl.gullberg@gmail.com>
 //
-//  Copyright (c) 2016 Jarl Gullberg
+//  Copyright (c) 2017 Jarl Gullberg
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -18,16 +18,20 @@
 //
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Reflection;
 using System.Threading;
-using Launchpad.Launcher.Handlers.Protocols;
-using System.Net;
-using log4net;
+
 using Launchpad.Common;
+using Launchpad.Launcher.Configuration;
+using Launchpad.Launcher.Handlers.Protocols;
+using Launchpad.Launcher.Utility;
+using NLog;
 
 namespace Launchpad.Launcher.Handlers
 {
@@ -39,34 +43,39 @@ namespace Launchpad.Launcher.Handlers
 	/// </summary>
 	internal sealed class LauncherHandler
 	{
-		/// <summary>
-		/// Logger instance for this class.
-		/// </summary>
-		private static readonly ILog Log = LogManager.GetLogger(typeof(LauncherHandler));
-
-		public event ChangelogDownloadFinishedEventHandler ChangelogDownloadFinished;
-		public event LauncherDownloadFinishedEventHandler LauncherDownloadFinished;
-		public event LauncherDownloadProgressChangedEventHandler LauncherDownloadProgressChanged;
-
-		private readonly ChangelogDownloadFinishedEventArgs ChangelogDownloadFinishedArgs = new ChangelogDownloadFinishedEventArgs();
-		private readonly PatchProtocolHandler Patch;
-
 		// Replace the variables in the script with actual data
 		private const string TempDirectoryVariable = "%temp%";
 		private const string LocalInstallDirectoryVariable = "%localDir%";
 		private const string LocalExecutableName = "%launchpadExecutable%";
 
 		/// <summary>
+		/// Logger instance for this class.
+		/// </summary>
+		private static readonly ILogger Log = LogManager.GetCurrentClassLogger();
+
+		/// <summary>
+		/// Raised whenever the launcher finishes downloading.
+		/// </summary>
+		public event EventHandler LauncherDownloadFinished;
+
+		/// <summary>
+		/// Raised whenever the launcher download progress changes.
+		/// </summary>
+		public event EventHandler<ModuleProgressChangedArgs> LauncherDownloadProgressChanged;
+
+		private readonly PatchProtocolHandler Patch;
+
+		/// <summary>
 		/// The config handler reference.
 		/// </summary>
-		private static readonly ConfigHandler Config = ConfigHandler.Instance;
+		private static readonly ILaunchpadConfiguration Configuration = ConfigHandler.Instance.Configuration;
 
 		/// <summary>
 		/// Initializes a new instance of the <see cref="Launchpad.Launcher.Handlers.LauncherHandler"/> class.
 		/// </summary>
 		public LauncherHandler()
 		{
-			this.Patch = Config.GetPatchProtocol();
+			this.Patch = PatchProtocolProvider.GetHandler();
 
 			this.Patch.ModuleDownloadProgressChanged += OnLauncherDownloadProgressChanged;
 			this.Patch.ModuleInstallationFinished += OnLauncherDownloadFinished;
@@ -81,7 +90,7 @@ namespace Launchpad.Launcher.Handlers
 			{
 				Log.Info($"Starting update of lancher files using protocol \"{this.Patch.GetType().Name}\"");
 
-				Thread t = new Thread(() => this.Patch.UpdateModule(EModule.Launcher))
+				var t = new Thread(() => this.Patch.UpdateModule(EModule.Launcher))
 				{
 					Name = "UpdateLauncher",
 					IsBackground = true
@@ -101,14 +110,27 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if the changelog can be accessed; otherwise, <c>false</c>.</returns>
 		public static bool CanAccessStandardChangelog()
 		{
-			HttpWebRequest headRequest = (HttpWebRequest)WebRequest.Create(Config.GetChangelogURL());
+			if (string.IsNullOrEmpty(Configuration.ChangelogAddress.AbsoluteUri))
+			{
+				return false;
+			}
+
+			var address = Configuration.ChangelogAddress;
+
+			// Only allow HTTP URIs
+			if (!(address.Scheme == "http" || address.Scheme == "https"))
+			{
+				return false;
+			}
+
+			var headRequest = (HttpWebRequest)WebRequest.Create(address);
 			headRequest.Method = "HEAD";
 
 			try
 			{
-				using (HttpWebResponse headResponse = (HttpWebResponse)headRequest.GetResponse())
+				using (var headResponse = (HttpWebResponse)headRequest.GetResponse())
 				{
-					return (headResponse.StatusCode == HttpStatusCode.OK);
+					return headResponse.StatusCode == HttpStatusCode.OK;
 				}
 			}
 			catch (WebException wex)
@@ -119,31 +141,6 @@ namespace Launchpad.Launcher.Handlers
 		}
 
 		/// <summary>
-		/// Gets the changelog from the server asynchronously.
-		/// </summary>
-		public void LoadFallbackChangelog()
-		{
-			Thread t = new Thread(LoadFallbackChangelog_Implementation)
-			{
-				Name = "LoadFallbackChangelog",
-				IsBackground = true
-			};
-
-			t.Start();
-		}
-
-		private void LoadFallbackChangelog_Implementation()
-		{
-			if (this.Patch.CanProvideChangelog())
-			{
-				this.ChangelogDownloadFinishedArgs.HTML = this.Patch.GetChangelogSource();
-				this.ChangelogDownloadFinishedArgs.URL = Config.GetChangelogURL();
-			}
-
-			OnChangelogDownloadFinished();
-		}
-
-		/// <summary>
 		/// Creates the update script on disk.
 		/// </summary>
 		/// <returns>ProcessStartInfo for the update script.</returns>
@@ -151,17 +148,24 @@ namespace Launchpad.Launcher.Handlers
 		{
 			try
 			{
-				string updateScriptPath = GetUpdateScriptPath();
-				string updateScriptSource = GetUpdateScriptSource();
+				var updateScriptPath = GetUpdateScriptPath();
+				var updateScriptSource = GetUpdateScriptSource();
 
 				File.WriteAllText(updateScriptPath, updateScriptSource);
 
-				ProcessStartInfo updateShellProcess = new ProcessStartInfo
+				if (PlatformHelpers.IsRunningOnUnix())
+				{
+					var chmod = Process.Start("chmod", $"+x {updateScriptPath}");
+					chmod?.WaitForExit();
+				}
+
+				var updateShellProcess = new ProcessStartInfo
 				{
 					FileName = updateScriptPath,
 					UseShellExecute = false,
 					RedirectStandardOutput = false,
-					WindowStyle = ProcessWindowStyle.Hidden
+					CreateNoWindow = true,
+					WindowStyle = ProcessWindowStyle.Normal
 				};
 
 				return updateShellProcess;
@@ -181,25 +185,25 @@ namespace Launchpad.Launcher.Handlers
 		private static string GetUpdateScriptSource()
 		{
 			// Load the script from the embedded resources
-			Assembly localAssembly = Assembly.GetExecutingAssembly();
+			var localAssembly = Assembly.GetExecutingAssembly();
 
-			string scriptSource = "";
-			string resourceName = GetUpdateScriptResourceName();
-			using (Stream resourceStream = localAssembly.GetManifestResourceStream(resourceName))
+			var scriptSource = string.Empty;
+			var resourceName = GetUpdateScriptResourceName();
+			using (var resourceStream = localAssembly.GetManifestResourceStream(resourceName))
 			{
 				if (resourceStream != null)
 				{
-					using (StreamReader reader = new StreamReader(resourceStream))
+					using (var reader = new StreamReader(resourceStream))
 					{
 						scriptSource = reader.ReadToEnd();
 					}
 				}
 			}
 
-			string transientScriptSource = scriptSource;
+			var transientScriptSource = scriptSource;
 
 			transientScriptSource = transientScriptSource.Replace(TempDirectoryVariable, Path.GetTempPath());
-			transientScriptSource = transientScriptSource.Replace(LocalInstallDirectoryVariable, ConfigHandler.GetLocalDir());
+			transientScriptSource = transientScriptSource.Replace(LocalInstallDirectoryVariable, DirectoryHelpers.GetLocalLauncherDirectory());
 			transientScriptSource = transientScriptSource.Replace(LocalExecutableName, Path.GetFileName(localAssembly.Location));
 
 			return transientScriptSource;
@@ -210,7 +214,7 @@ namespace Launchpad.Launcher.Handlers
 		/// </summary>
 		private static string GetUpdateScriptResourceName()
 		{
-			if (SystemInformation.IsRunningOnUnix())
+			if (PlatformHelpers.IsRunningOnUnix())
 			{
 				return "Launchpad.Launcher.Resources.launchpad_update.sh";
 			}
@@ -225,7 +229,7 @@ namespace Launchpad.Launcher.Handlers
 		/// </summary>
 		private static string GetUpdateScriptPath()
 		{
-			if (SystemInformation.IsRunningOnUnix())
+			if (PlatformHelpers.IsRunningOnUnix())
 			{
 				return $@"{Path.GetTempPath()}launchpad_update.sh";
 			}
@@ -235,49 +239,14 @@ namespace Launchpad.Launcher.Handlers
 			}
 		}
 
-		/// <summary>
-		/// Raises the changelog download finished event.
-		/// Fires when the changelog has finished downloading and all values have been assigned.
-		/// </summary>
-		private void OnChangelogDownloadFinished()
-		{
-			this.ChangelogDownloadFinished?.Invoke(this, this.ChangelogDownloadFinishedArgs);
-		}
-
 		private void OnLauncherDownloadProgressChanged(object sender, ModuleProgressChangedArgs e)
 		{
 			this.LauncherDownloadProgressChanged?.Invoke(sender, e);
 		}
 
-		private void OnLauncherDownloadFinished(object sender, ModuleInstallationFinishedArgs e)
+		private void OnLauncherDownloadFinished(object sender, EModule e)
 		{
-			this.LauncherDownloadFinished?.Invoke(sender, e);
-		}
-	}
-
-	/*
-		Launcher-specific events
-	*/
-	public delegate void ChangelogDownloadFinishedEventHandler(object sender,ChangelogDownloadFinishedEventArgs e);
-	public delegate void LauncherDownloadProgressChangedEventHandler(object sender,ModuleProgressChangedArgs e);
-	public delegate void LauncherDownloadFinishedEventHandler(object sendre,ModuleInstallationFinishedArgs e);
-
-	/*
-		Launcher-specific event arguments
-	*/
-	public class ChangelogDownloadFinishedEventArgs : EventArgs
-	{
-		public string HTML
-		{
-			get;
-			set;
-		}
-
-		public string URL
-		{
-			get;
-			set;
+			this.LauncherDownloadFinished?.Invoke(sender, EventArgs.Empty);
 		}
 	}
 }
-

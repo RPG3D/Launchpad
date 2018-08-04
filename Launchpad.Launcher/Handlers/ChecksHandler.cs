@@ -4,7 +4,7 @@
 //  Author:
 //       Jarl Gullberg <jarl.gullberg@gmail.com>
 //
-//  Copyright (c) 2016 Jarl Gullberg
+//  Copyright (c) 2017 Jarl Gullberg
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -18,11 +18,15 @@
 //
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 using System.IO;
-using log4net;
+
 using Launchpad.Common.Enums;
 using Launchpad.Launcher.Handlers.Protocols;
+
+using Launchpad.Launcher.Utility;
+using NLog;
 
 namespace Launchpad.Launcher.Handlers
 {
@@ -32,14 +36,19 @@ namespace Launchpad.Launcher.Handlers
 	internal sealed class ChecksHandler
 	{
 		/// <summary>
-		/// The config handler reference.
-		/// </summary>
-		private readonly ConfigHandler Configuration = ConfigHandler.Instance;
-
-		/// <summary>
 		/// Logger instance for this class.
 		/// </summary>
-		private static readonly ILog Log = LogManager.GetLogger(typeof(ChecksHandler));
+		private static readonly ILogger Log = LogManager.GetCurrentClassLogger();
+
+		private readonly PatchProtocolHandler Patch;
+
+		/// <summary>
+		/// Initializes a new instance of the <see cref="ChecksHandler"/> class.
+		/// </summary>
+		public ChecksHandler()
+		{
+			this.Patch = PatchProtocolProvider.GetHandler();
+		}
 
 		/// <summary>
 		/// Determines whether this instance can connect to a patching service.
@@ -47,9 +56,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if this instance can connect to a patching service; otherwise, <c>false</c>.</returns>
 		public bool CanPatch()
 		{
-			PatchProtocolHandler patchService = this.Configuration.GetPatchProtocol();
-
-			return patchService != null && patchService.CanPatch();
+			return this.Patch != null && this.Patch.CanPatch();
 		}
 
 		/// <summary>
@@ -59,7 +66,7 @@ namespace Launchpad.Launcher.Handlers
 		public static bool IsInitialStartup()
 		{
 			// We use an empty file to determine if this is the first launch or not
-			return !File.Exists(ConfigHandler.GetLauncherCookiePath());
+			return !File.Exists(DirectoryHelpers.GetLauncherTagfilePath());
 		}
 
 		/// <summary>
@@ -69,25 +76,23 @@ namespace Launchpad.Launcher.Handlers
 		public bool IsGameInstalled()
 		{
 			// Criteria for considering the game 'installed'
-			// Does the game directory exist?
-			bool bHasGameDirectory = Directory.Exists(this.Configuration.GetGamePath());
+			var hasGameDirectory = Directory.Exists(DirectoryHelpers.GetLocalGameDirectory());
+			var hasInstallCookie = File.Exists(DirectoryHelpers.GetGameTagfilePath());
+			var hasGameVersionFile = File.Exists(DirectoryHelpers.GetLocalGameVersionPath());
 
-			// Is there an .install file in the directory?
-			bool bHasInstallationCookie = File.Exists(ConfigHandler.GetGameCookiePath());
-
-			// Is there a version file?
-			bool bHasGameVersion = File.Exists(this.Configuration.GetGameVersionPath());
-
-			if (!bHasGameVersion && bHasGameDirectory)
+			if (!hasGameVersionFile && hasGameDirectory)
 			{
-				Log.Warn("No GameVersion.txt file was found in the installation directory.\n" +
-				         "This may be due to a download error, or the developer may not have included one.\n" +
-				         "Without it, the game cannot be considered fully installed.\n" +
-				         "If you are the developer of this game, add one to your game files with your desired version in it.");
+				Log.Warn
+				(
+					"No GameVersion.txt file was found in the installation directory.\n" +
+					"This may be due to a download error, or the developer may not have included one.\n" +
+					"Without it, the game cannot be considered fully installed.\n" +
+					"If you are the developer of this game, add one to your game files with your desired version in it."
+				);
 			}
 
 			// If any of these criteria are false, the game is not considered fully installed.
-			return bHasGameDirectory && bHasInstallationCookie && IsInstallCookieEmpty() && bHasGameVersion;
+			return hasGameDirectory && hasInstallCookie && IsInstallCookieEmpty() && hasGameVersionFile;
 		}
 
 		/// <summary>
@@ -96,8 +101,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if the game is outdated; otherwise, <c>false</c>.</returns>
 		public bool IsGameOutdated()
 		{
-			PatchProtocolHandler patchService = this.Configuration.GetPatchProtocol();
-			return patchService.IsModuleOutdated(EModule.Game);
+			return this.Patch.IsModuleOutdated(EModule.Game);
 		}
 
 		/// <summary>
@@ -106,8 +110,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if the launcher is outdated; otherwise, <c>false</c>.</returns>
 		public bool IsLauncherOutdated()
 		{
-			PatchProtocolHandler patchService = this.Configuration.GetPatchProtocol();
-			return patchService.IsModuleOutdated(EModule.Launcher);
+			return this.Patch.IsModuleOutdated(EModule.Launcher);
 		}
 
 		/// <summary>
@@ -116,18 +119,16 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if the install cookie is empty, otherwise, <c>false</c>.</returns>
 		private static bool IsInstallCookieEmpty()
 		{
-			//Is there an .install file in the directory?
-			bool bHasInstallationCookie = File.Exists(ConfigHandler.GetGameCookiePath());
+			// Is there an .install file in the directory?
+			var hasInstallCookie = File.Exists(DirectoryHelpers.GetGameTagfilePath());
+			var isInstallCookieEmpty = false;
 
-			//Is the .install file empty? Assume false.
-			bool bIsInstallCookieEmpty = false;
-
-			if (bHasInstallationCookie)
+			if (hasInstallCookie)
 			{
-				bIsInstallCookieEmpty = string.IsNullOrEmpty(File.ReadAllText(ConfigHandler.GetGameCookiePath()));
+				isInstallCookieEmpty = string.IsNullOrEmpty(File.ReadAllText(DirectoryHelpers.GetGameTagfilePath()));
 			}
 
-			return bIsInstallCookieEmpty;
+			return isInstallCookieEmpty;
 		}
 
 		/// <summary>
@@ -137,9 +138,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <param name="platform">platform.</param>
 		public bool IsPlatformAvailable(ESystemTarget platform)
 		{
-			PatchProtocolHandler patchService = this.Configuration.GetPatchProtocol();
-			return patchService.IsPlatformAvailable(platform);
+			return this.Patch.IsPlatformAvailable(platform);
 		}
 	}
 }
-
