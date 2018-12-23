@@ -126,16 +126,20 @@ namespace Launchpad.Common.Handlers.Manifest
 				{
 					this.Manifests.AddOrUpdate(manifestType, null);
 				}
-
-				this.Manifests.AddOrUpdate(manifestType, LoadManifest(newManifestPath));
+				else
+				{
+					this.Manifests.AddOrUpdate(manifestType, LoadManifest(newManifestPath));
+				}
 
 				// Reload old manifests
 				if (!File.Exists(oldManifestPath))
 				{
 					this.OldManifests.AddOrUpdate(manifestType, null);
 				}
-
-				this.OldManifests.AddOrUpdate(manifestType, LoadManifest(oldManifestPath));
+				else
+				{
+					this.OldManifests.AddOrUpdate(manifestType, LoadManifest(oldManifestPath));
+				}
 			}
 		}
 
@@ -209,10 +213,10 @@ namespace Launchpad.Common.Handlers.Manifest
 		{
 			if (manifestType == EManifestType.Launchpad)
 			{
-				return $"{this.RemoteURL.LocalPath}/launcher/{manifestType}Manifest.txt";
+				return $"{this.RemoteURL}/launcher/{manifestType}Manifest.txt";
 			}
 
-			return $"{this.RemoteURL.LocalPath}/game/{this.SystemTarget}/{manifestType}Manifest.txt";
+			return $"{this.RemoteURL}/game/{this.SystemTarget}/{manifestType}Manifest.txt";
 		}
 
 		/// <summary>

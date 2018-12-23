@@ -27,7 +27,6 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="GtkSharp" Version="3.22.24.36" />
-    <PackageReference Include="GtkSharp.Win32" Version="3.1.2" />
     <PackageReference Include="CommandLineParser" Version="2.2.1" />
     <PackageReference Include="NGettext" Version="0.6.3" />
     <PackageReference Include="NLog" Version="4.5.2" />
@@ -50,13 +49,23 @@
   </ItemGroup>
   <Target Name="CopyGTK" AfterTargets="Build">
     <ItemGroup>
-      <GTKetc Include="$(SolutionDir)\lib\gtk+-3.16-bundle-win32\etc\**\*.*" />
-      <GTKlib Include="$(SolutionDir)\lib\gtk+-3.16-bundle-win32\lib\**\*.*" />
-      <GTKshare Include="$(SolutionDir)\lib\gtk+-3.16-bundle-win32\share\**\*.*" />
+      <GTKetc Include="$(SolutionDir)\lib\gtk+-3.16-bundle-win32\etc\**\*.*">
+        <Visible>false</Visible>
+      </GTKetc>
+      <GTKlib Include="$(SolutionDir)\lib\gtk+-3.16-bundle-win32\lib\**\*.*">
+        <Visible>false</Visible>
+      </GTKlib>
+      <GTKshare Include="$(SolutionDir)\lib\gtk+-3.16-bundle-win32\share\**\*.*">
+        <Visible>false</Visible>
+      </GTKshare>
+      <GTKbin Include="$(SolutionDir)\lib\gtk+-3.16-bundle-win32\bin\**\*.*">
+        <Visible>false</Visible>
+      </GTKbin>
     </ItemGroup>
     <Message Text="Copying GTK+ libraries..." />
     <Copy SourceFiles="@(GTKetc)" DestinationFolder="$(OutputPath)\etc\%(RecursiveDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(GTKlib)" DestinationFolder="$(OutputPath)\lib\%(RecursiveDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(GTKshare)" DestinationFolder="$(OutputPath)\share\%(RecursiveDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(GTKbin)" DestinationFolder="$(OutputPath)\%(RecursiveDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>
